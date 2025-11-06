@@ -21,6 +21,7 @@ class HandleCommandUseCase(
 
         when {
             command == "/models" -> handleModelsCommand(message.chatId)
+            command == "/consultant" -> handleConsultantCommand(message.chatId)
             else -> {
                 // Игнорируем неизвестные команды
             }
@@ -48,6 +49,19 @@ class HandleCommandUseCase(
             chatId = chatId,
             text = "Выберите модель:",
             keyboard = keyboard
+        )
+    }
+
+    /**
+     * Обрабатывает команду /consultant.
+     * Отправляет приветственное сообщение о выборе режима консультанта.
+     *
+     * @param chatId ID чата, в который нужно отправить сообщение
+     */
+    private suspend fun handleConsultantCommand(chatId: Long) {
+        repository.sendMessage(
+            chatId = chatId,
+            text = "Вы выбрали режим консультант"
         )
     }
 }
