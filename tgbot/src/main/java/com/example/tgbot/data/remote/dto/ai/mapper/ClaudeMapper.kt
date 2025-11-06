@@ -15,12 +15,26 @@ import com.example.tgbot.domain.model.ai.MessageRole
  * а не в массиве messages. Эта функция автоматически разделяет системные сообщения
  * и обычные сообщения пользователя/ассистента.
  *
+ * Логирование: выводит статистику сообщений для отладки.
+ *
  * @return DTO запроса для Claude API
+ * @throws IllegalArgumentException если не передано ни одного сообщения user/assistant
  */
 fun AiRequest.toClaudeDto(): ClaudeMessageRequest {
     // Отделяем системные сообщения от user/assistant
     val systemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }?.content
     val conversationMessages = messages.filter { it.role != MessageRole.SYSTEM }
+
+    // Claude API требует хотя бы одно сообщение в массиве messages
+    if (conversationMessages.isEmpty()) {
+        throw IllegalArgumentException("Claude API requires at least one user/assistant message")
+    }
+
+    // Логирование для отладки: выводим статистику сообщений
+    println("Claude mapper: total messages=${messages.size}, conversation=${conversationMessages.size}, system=${systemMessage != null}")
+    conversationMessages.forEachIndexed { index, msg ->
+        println("  Message $index: role=${msg.role}, content=${msg.content.take(50)}...")
+    }
 
     return ClaudeMessageRequest(
         model = model.modelId,
@@ -61,10 +75,16 @@ fun AiMessage.toClaudeDto(): ClaudeMessageDto {
  *
  * @param request Оригинальный запрос (используется для сохранения информации о модели)
  * @return Доменная модель ответа
- * @throws IllegalStateException если ответ не содержит текстового контента
+ * @throws IllegalStateException если ответ содержит ошибку или не содержит текстового контента
  */
 fun ClaudeMessageResponse.toDomain(request: AiRequest): AiResponse {
-    val text = content.firstOrNull { it.type == "text" }?.text
+    // Проверяем наличие ошибки в ответе
+    error?.let {
+        throw IllegalStateException("Claude API error: ${it.type} - ${it.message}")
+    }
+
+    // Извлекаем текстовый контент
+    val text = content?.firstOrNull { it.type == "text" }?.text
         ?: throw IllegalStateException("Claude response has no text content")
 
     return AiResponse(

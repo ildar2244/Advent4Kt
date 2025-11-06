@@ -8,7 +8,10 @@ import com.example.tgbot.domain.model.ai.AiResponse
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /**
  * HTTP-клиент для работы с Claude API через ProxyAPI.
@@ -31,20 +34,42 @@ class ClaudeApiClient(
      * - "x-api-key" - ключ API
      * - "anthropic-version" - версия API (2023-06-01)
      *
+     * Логирование: для отладки выводится полный JSON запроса и тело ошибки при неудаче.
+     *
      * @param request Доменная модель запроса
      * @return Доменная модель ответа с сгенерированным текстом
+     * @throws IllegalStateException если API вернул ошибку
      */
     override suspend fun sendMessage(request: AiRequest): AiResponse {
         val requestDto = request.toClaudeDto()
 
-        val response: ClaudeMessageResponse = client.post(request.model.endpoint) {
-            contentType(ContentType.Application.Json)
-            // Claude требует специальные заголовки
-            header("x-api-key", apiKey)
-            header("anthropic-version", "2023-06-01")
-            setBody(requestDto)
-        }.body()
+        // Логируем JSON тела запроса для отладки
+        val json = Json { prettyPrint = true }
+        val requestJson = json.encodeToString(requestDto)
+        println("Claude API Request JSON:\n$requestJson")
 
-        return response.toDomain(request)
+        try {
+            val httpResponse: HttpResponse = client.post(request.model.endpoint) {
+                contentType(ContentType.Application.Json)
+                // Claude требует специальные заголовки
+                header("x-api-key", apiKey)
+                header("anthropic-version", "2023-06-01")
+                setBody(requestDto)
+            }
+
+            // Если ответ не успешный, выводим тело ошибки для диагностики
+            if (!httpResponse.status.isSuccess()) {
+                val errorBody = httpResponse.bodyAsText()
+                println("Claude API Error Response (${httpResponse.status}):\n$errorBody")
+                throw IllegalStateException("Claude API returned ${httpResponse.status}: $errorBody")
+            }
+
+            val response: ClaudeMessageResponse = httpResponse.body()
+            return response.toDomain(request)
+
+        } catch (e: Exception) {
+            println("Claude API Exception: ${e.message}")
+            throw e
+        }
     }
 }

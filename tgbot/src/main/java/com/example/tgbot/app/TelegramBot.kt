@@ -2,6 +2,9 @@ package com.example.tgbot.app
 
 import com.example.tgbot.BuildConfig
 import com.example.tgbot.data.remote.TelegramApi
+import com.example.tgbot.data.remote.ai.ClaudeApiClient
+import com.example.tgbot.data.remote.ai.OpenAiApiClient
+import com.example.tgbot.data.repository.AiRepositoryImpl
 import com.example.tgbot.data.repository.TelegramRepositoryImpl
 import com.example.tgbot.domain.usecase.HandleCallbackUseCase
 import com.example.tgbot.domain.usecase.HandleCommandUseCase
@@ -50,10 +53,17 @@ class TelegramBot(private val token: String) {
 
     // Инициализация слоёв Clean Architecture
     private val api = TelegramApi(httpClient, token)
-    private val repository = TelegramRepositoryImpl(api)
-    private val handleMessageUseCase = HandleMessageUseCase(repository)
-    private val handleCommandUseCase = HandleCommandUseCase(repository)
-    private val handleCallbackUseCase = HandleCallbackUseCase(repository)
+    private val telegramRepository = TelegramRepositoryImpl(api)
+
+    // Инициализация AI клиентов
+    private val openAiClient = OpenAiApiClient(httpClient, BuildConfig.OPENAI_API_KEY)
+    private val claudeClient = ClaudeApiClient(httpClient, BuildConfig.CLAUDE_API_KEY)
+    private val aiRepository = AiRepositoryImpl(openAiClient, claudeClient)
+
+    // Инициализация use cases
+    private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository)
+    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository)
+    private val handleCallbackUseCase = HandleCallbackUseCase(telegramRepository)
 
     // Offset для отслеживания обработанных обновлений
     private var offset: Long? = null
@@ -69,7 +79,7 @@ class TelegramBot(private val token: String) {
         while (isRunning) {
             try {
                 // Получаем обновления от Telegram
-                val updates = repository.getUpdates(offset)
+                val updates = telegramRepository.getUpdates(offset)
 
                 updates.forEach { update ->
                     // Обработка callback'ов (клики по инлайн-кнопкам)
@@ -117,14 +127,24 @@ class TelegramBot(private val token: String) {
  * Инициализирует и запускает бота.
  */
 fun main() = runBlocking {
-    // Получаем токен из BuildConfig (загружается из local.properties)
-    val token = BuildConfig.TELEGRAM_BOT_TOKEN
-    if (token.isEmpty()) {
-        println("Ошибка: TELEGRAM_BOT_TOKEN не задан")
+    // Получаем токены из BuildConfig (загружаются из local.properties)
+    val telegramToken = BuildConfig.TELEGRAM_BOT_TOKEN
+    val openAiKey = BuildConfig.OPENAI_API_KEY
+    val claudeKey = BuildConfig.CLAUDE_API_KEY
+
+    // Проверяем наличие всех необходимых токенов
+    if (telegramToken.isEmpty()) {
+        println("Ошибка: TELEGRAM_BOT_TOKEN не задан в local.properties")
         return@runBlocking
     }
+    if (openAiKey.isEmpty()) {
+        println("Предупреждение: OPENAI_API_KEY не задан в local.properties")
+    }
+    if (claudeKey.isEmpty()) {
+        println("Предупреждение: CLAUDE_API_KEY не задан в local.properties")
+    }
 
-    val bot = TelegramBot(token)
+    val bot = TelegramBot(telegramToken)
 
     // Регистрируем обработчик остановки для корректного завершения
     Runtime.getRuntime().addShutdownHook(Thread {
