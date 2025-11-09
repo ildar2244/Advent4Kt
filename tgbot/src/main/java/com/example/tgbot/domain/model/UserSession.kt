@@ -8,10 +8,12 @@ import com.example.tgbot.domain.model.ai.AiModel
  *
  * @property selectedModel Выбранная AI-модель (null, если модель не выбрана)
  * @property conversationHistory История сообщений в диалоге с AI
+ * @property currentScenario Текущий сценарий взаимодействия с AI
  */
 data class UserSession(
     val selectedModel: AiModel? = null,
-    val conversationHistory: MutableList<AiMessage> = mutableListOf()
+    val conversationHistory: MutableList<AiMessage> = mutableListOf(),
+    val currentScenario: Scenario = Scenario.DEFAULT
 )
 
 /**
@@ -40,6 +42,17 @@ object SessionManager {
     fun setModel(chatId: Long, model: AiModel) {
         val session = getSession(chatId)
         sessions[chatId] = session.copy(selectedModel = model)
+    }
+
+    /**
+     * Устанавливает текущий сценарий для пользователя.
+     *
+     * @param chatId ID чата пользователя
+     * @param scenario Выбранный сценарий
+     */
+    fun setScenario(chatId: Long, scenario: Scenario) {
+        val session = getSession(chatId)
+        sessions[chatId] = session.copy(currentScenario = scenario)
     }
 
     /**
