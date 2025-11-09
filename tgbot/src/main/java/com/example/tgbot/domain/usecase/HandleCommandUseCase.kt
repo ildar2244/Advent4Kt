@@ -13,7 +13,7 @@ import com.example.tgbot.domain.repository.TelegramRepository
  *
  * Поддерживаемые команды:
  * - /start - Приветственное сообщение с кнопкой выбора модели
- * - /models - Выбор AI-модели (GPT-4o Mini, Claude 3.5 Haiku)
+ * - /models - Выбор AI-модели (GPT-4o Mini, Claude 3.5 Haiku, YandexGPT Lite)
  * - /scenario - Выбор сценария взаимодействия с AI
  * - /free-chat, /json-format, /consultant, /step-by-step, /experts - Прямая активация сценариев
  * - /stop - Завершение AI-консультации и очистка сессии
@@ -75,7 +75,7 @@ class HandleCommandUseCase(
 
     /**
      * Обрабатывает команду /models.
-     * Отправляет сообщение с двумя инлайн-кнопками для выбора AI-модели.
+     * Отправляет сообщение с инлайн-кнопками для выбора AI-модели.
      *
      * @param chatId ID чата, в который нужно отправить сообщение
      */
@@ -91,6 +91,12 @@ class HandleCommandUseCase(
                     InlineKeyboardButton(
                         text = AiModel.CLAUDE_HAIKU.displayName,
                         callbackData = "model_claude"
+                    )
+                ),
+                listOf(
+                    InlineKeyboardButton(
+                        text = AiModel.YANDEX_GPT_LITE.displayName,
+                        callbackData = "model_yandex"
                     )
                 )
             )

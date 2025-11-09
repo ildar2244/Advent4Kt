@@ -28,6 +28,15 @@ enum class AiModel(
         displayName = "Claude 3.5 Haiku",
         modelId = "claude-3-5-haiku-20241022",
         endpoint = "https://api.proxyapi.ru/anthropic/v1/messages"
+    ),
+
+    /**
+     * YandexGPT Lite от Yandex Cloud.
+     */
+    YANDEX_GPT_LITE(
+        displayName = "YandexGPT Lite",
+        modelId = "yandexgpt-lite",
+        endpoint = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
     );
 
     companion object {

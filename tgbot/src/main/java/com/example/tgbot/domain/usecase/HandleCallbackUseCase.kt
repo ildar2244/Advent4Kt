@@ -15,7 +15,7 @@ import com.example.tgbot.domain.repository.TelegramRepository
  *
  * Обрабатываемые типы callback'ов:
  * - "show_models" - Показать список AI-моделей (из команды /start)
- * - "model_gpt", "model_claude" - Выбор конкретной AI-модели
+ * - "model_gpt", "model_claude", "model_yandex" - Выбор конкретной AI-модели
  * - "scenario_*" - Выбор сценария взаимодействия (динамически из Scenario enum)
  *
  * При выборе модели:
@@ -57,6 +57,7 @@ class HandleCallbackUseCase(
         val selectedModel = when (data) {
             "model_gpt" -> AiModel.GPT_4O_MINI
             "model_claude" -> AiModel.CLAUDE_HAIKU
+            "model_yandex" -> AiModel.YANDEX_GPT_LITE
             else -> return
         }
 
@@ -155,6 +156,12 @@ class HandleCallbackUseCase(
                     InlineKeyboardButton(
                         text = AiModel.CLAUDE_HAIKU.displayName,
                         callbackData = "model_claude"
+                    )
+                ),
+                listOf(
+                    InlineKeyboardButton(
+                        text = AiModel.YANDEX_GPT_LITE.displayName,
+                        callbackData = "model_yandex"
                     )
                 )
             )

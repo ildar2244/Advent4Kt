@@ -4,6 +4,7 @@ import com.example.tgbot.BuildConfig
 import com.example.tgbot.data.remote.TelegramApi
 import com.example.tgbot.data.remote.ai.ClaudeApiClient
 import com.example.tgbot.data.remote.ai.OpenAiApiClient
+import com.example.tgbot.data.remote.ai.YandexGptApiClient
 import com.example.tgbot.data.repository.AiRepositoryImpl
 import com.example.tgbot.data.repository.TelegramRepositoryImpl
 import com.example.tgbot.domain.usecase.HandleCallbackUseCase
@@ -58,7 +59,12 @@ class TelegramBot(private val token: String) {
     // Инициализация AI клиентов
     private val openAiClient = OpenAiApiClient(httpClient, BuildConfig.OPENAI_API_KEY)
     private val claudeClient = ClaudeApiClient(httpClient, BuildConfig.CLAUDE_API_KEY)
-    private val aiRepository = AiRepositoryImpl(openAiClient, claudeClient)
+    private val yandexGptClient = YandexGptApiClient(
+        httpClient,
+        BuildConfig.YANDEX_GPT_API_KEY,
+        BuildConfig.YANDEX_CLOUD_FOLDER_ID
+    )
+    private val aiRepository = AiRepositoryImpl(openAiClient, claudeClient, yandexGptClient)
 
     // Инициализация use cases
     private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository)
@@ -131,6 +137,8 @@ fun main() = runBlocking {
     val telegramToken = BuildConfig.TELEGRAM_BOT_TOKEN
     val openAiKey = BuildConfig.OPENAI_API_KEY
     val claudeKey = BuildConfig.CLAUDE_API_KEY
+    val yandexGptKey = BuildConfig.YANDEX_GPT_API_KEY
+    val yandexCloudFolderId = BuildConfig.YANDEX_CLOUD_FOLDER_ID
 
     // Проверяем наличие всех необходимых токенов
     if (telegramToken.isEmpty()) {
@@ -142,6 +150,12 @@ fun main() = runBlocking {
     }
     if (claudeKey.isEmpty()) {
         println("Предупреждение: CLAUDE_API_KEY не задан в local.properties")
+    }
+    if (yandexGptKey.isEmpty()) {
+        println("Предупреждение: YANDEX_GPT_API_KEY не задан в local.properties")
+    }
+    if (yandexCloudFolderId.isEmpty()) {
+        println("Предупреждение: YANDEX_CLOUD_FOLDER_ID не задан в local.properties")
     }
 
     val bot = TelegramBot(telegramToken)
