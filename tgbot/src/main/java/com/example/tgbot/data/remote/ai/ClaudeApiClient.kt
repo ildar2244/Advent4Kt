@@ -42,6 +42,7 @@ class ClaudeApiClient(
      */
     override suspend fun sendMessage(request: AiRequest): AiResponse {
         val requestDto = request.toClaudeDto()
+        println("REQUEST to CLAUDE: $requestDto")
 
         // Логируем JSON тела запроса для отладки
         val json = Json { prettyPrint = true }

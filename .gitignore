@@ -9,5 +9,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+/tasks
 /CLAUDE.md
 /token_usage.log
+/token_journal/

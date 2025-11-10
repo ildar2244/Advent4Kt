@@ -37,6 +37,7 @@ class YandexGptApiClient(
      */
     override suspend fun sendMessage(request: AiRequest): AiResponse {
         val requestDto = request.toYandexGptDto(folderId)
+        println("REQUEST to YANDEX_GPT: $requestDto")
 
         val response: YandexGptCompletionResponse = client.post(request.model.endpoint) {
             contentType(ContentType.Application.Json)

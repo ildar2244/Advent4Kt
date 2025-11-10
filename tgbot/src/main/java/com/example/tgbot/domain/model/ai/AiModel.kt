@@ -14,6 +14,8 @@ enum class AiModel(
 ) {
     /**
      * GPT-4o Mini от OpenAI (базовая модель по умолчанию).
+     * gpt-4o-mini
+     * gpt-5-mini-2025-08-07
      */
     GPT_4O_MINI(
         displayName = "GPT-4o Mini",

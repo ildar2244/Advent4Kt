@@ -39,16 +39,16 @@ class TelegramBot(private val token: String) {
                 override fun log(message: String) {
                     // Маскируем токен в логах для безопасности
                     val maskedMessage = message.replace(token, "***TOKEN***")
-                    println(maskedMessage)
+//                    println(maskedMessage)
                 }
             }
             level = LogLevel.INFO
         }
         // Настройка таймаутов для long polling
         install(HttpTimeout) {
-            requestTimeoutMillis = 35000  // 30 сек long polling + 5 сек запас
-            connectTimeoutMillis = 10000  // Таймаут подключения
-            socketTimeoutMillis = 35000   // Таймаут сокета
+            requestTimeoutMillis = 40000  // 30 сек long polling + 10 сек запас
+            connectTimeoutMillis = 40000  // Таймаут подключения (должен быть > long polling timeout)
+            socketTimeoutMillis = 40000   // Таймаут сокета
         }
     }
 
@@ -90,14 +90,14 @@ class TelegramBot(private val token: String) {
                 updates.forEach { update ->
                     // Обработка callback'ов (клики по инлайн-кнопкам)
                     update.callbackQuery?.let { callback ->
-                        println("Получен callback от ${callback.from.firstName}: ${callback.data}")
+//                        println("Получен callback от ${callback.from.firstName}: ${callback.data}")
                         handleCallbackUseCase(callback)
                     }
 
                     // Обработка текстовых сообщений
                     update.message?.let { message ->
                         val text = message.text ?: return@let
-                        println("Получено сообщение от ${message.from.firstName}: $text")
+//                        println("Получено сообщение от ${message.from.firstName}: $text")
 
                         // Роутинг: команды vs обычные сообщения
                         if (text.startsWith("/")) {
@@ -112,7 +112,8 @@ class TelegramBot(private val token: String) {
                     offset = update.updateId + 1
                 }
             } catch (e: Exception) {
-                println("Ошибка при получении обновлений: ${e.message}")
+                val maskedMessage = e.message?.replace(token, "***TOKEN***") ?: "Unknown error"
+                println("Ошибка при получении обновлений: $maskedMessage")
                 e.printStackTrace()
             }
         }

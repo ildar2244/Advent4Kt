@@ -34,6 +34,7 @@ class OpenAiApiClient(
      */
     override suspend fun sendMessage(request: AiRequest): AiResponse {
         val requestDto = request.toOpenAiDto()
+        println("REQUEST to OPENAI: $requestDto")
 
         val response: OpenAiChatResponse = client.post(request.model.endpoint) {
             contentType(ContentType.Application.Json)

@@ -14,6 +14,7 @@ import com.example.tgbot.domain.repository.TelegramRepository
  * Поддерживаемые команды:
  * - /start - Приветственное сообщение с кнопкой выбора модели
  * - /models - Выбор AI-модели (GPT-4o Mini, Claude 3.5 Haiku, YandexGPT Lite)
+ * - /temperature - Настройка параметра temperature для генерации ответов AI
  * - /scenario - Выбор сценария взаимодействия с AI
  * - /free-chat, /json-format, /consultant, /step-by-step, /experts - Прямая активация сценариев
  * - /stop - Завершение AI-консультации и очистка сессии
@@ -35,6 +36,7 @@ class HandleCommandUseCase(
         when {
             command == "/start" -> handleStartCommand(message.chatId)
             command == "/models" -> handleModelsCommand(message.chatId)
+            command == "/temperature" -> handleTemperatureCommand(message.chatId)
             command == "/scenario" -> handleScenarioCommand(message.chatId)
             command == "/stop" -> handleStopCommand(message.chatId)
             else -> {
@@ -105,6 +107,46 @@ class HandleCommandUseCase(
         repository.sendMessageWithKeyboard(
             chatId = chatId,
             text = "Выберите AI-модель для диалога:",
+            keyboard = keyboard
+        )
+    }
+
+    /**
+     * Обрабатывает команду /temperature.
+     * Отправляет сообщение с инлайн-кнопками для выбора значения temperature.
+     * Доступные значения: 0.0, 0.6, 1.0
+     *
+     * @param chatId ID чата, в который нужно отправить сообщение
+     */
+    private suspend fun handleTemperatureCommand(chatId: Long) {
+        // Получаем текущее значение temperature
+        val session = SessionManager.getSession(chatId)
+        val currentTemperature = session.temperature
+        val modelName = session.selectedModel?.displayName ?: "не выбрана"
+
+        // Создаем клавиатуру с тремя кнопками temperature
+        val keyboard = InlineKeyboard(
+            rows = listOf(
+                listOf(
+                    InlineKeyboardButton(
+                        text = "0.0",
+                        callbackData = "set_temp:0.0"
+                    ),
+                    InlineKeyboardButton(
+                        text = "0.6",
+                        callbackData = "set_temp:0.6"
+                    ),
+                    InlineKeyboardButton(
+                        text = "1.0",
+                        callbackData = "set_temp:1.0"
+                    )
+                )
+            )
+        )
+
+        repository.sendMessageWithKeyboard(
+            chatId = chatId,
+            text = "✓ Выбрана модель: $modelName\ntemperature: $currentTemperature (/temperature)\n\nВыберите новое значение temperature:",
             keyboard = keyboard
         )
     }

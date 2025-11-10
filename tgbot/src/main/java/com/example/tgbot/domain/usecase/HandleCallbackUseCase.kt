@@ -53,6 +53,12 @@ class HandleCallbackUseCase(
             return
         }
 
+        // Проверяем, является ли callback изменением temperature
+        if (data.startsWith("set_temp:")) {
+            handleTemperatureCallback(callback, data, message.chatId, message.messageId)
+            return
+        }
+
         // Определяем выбранную модель на основе callback_data
         val selectedModel = when (data) {
             "model_gpt" -> AiModel.GPT_4O_MINI
@@ -67,20 +73,15 @@ class HandleCallbackUseCase(
         // Сбрасываем сценарий на "Просто чат" при выборе модели
         SessionManager.setScenario(message.chatId, Scenario.DEFAULT)
 
-        // Добавляем системное сообщение в начало диалога
-        SessionManager.addMessage(
-            message.chatId,
-            AiMessage(
-                role = MessageRole.SYSTEM,
-                content = "Ты полезный AI-ассистент. Отвечай кратко и по делу на русском языке."
-            )
-        )
+        // Получаем текущее значение temperature из сессии
+        val updatedSession = SessionManager.getSession(message.chatId)
+        val currentTemperature = updatedSession.temperature
 
         // Редактируем сообщение: убираем кнопки и меняем текст на подтверждение выбора
         repository.editMessageText(
             chatId = message.chatId,
             messageId = message.messageId,
-            text = "✓ Выбрана модель: ${selectedModel.displayName}"
+            text = "✓ Выбрана модель: ${selectedModel.displayName}\ntemperature: $currentTemperature (/temperature)"
         )
 
         // Отправляем приветственное сообщение с инструкциями
@@ -88,6 +89,7 @@ class HandleCallbackUseCase(
             chatId = message.chatId,
             text = "Я готов ответить на ваши вопросы с помощью ${selectedModel.displayName}.\n\n" +
                     "Напишите ваше сообщение, и я отвечу.\n\n" +
+                    "Используйте /temperature для изменения параметра генерации.\n" +
                     "Используйте /stop для выхода из режима AI-консультации."
         )
 
@@ -179,6 +181,41 @@ class HandleCallbackUseCase(
             chatId = chatId,
             text = "Выберите AI-модель для диалога:",
             keyboard = keyboard
+        )
+
+        // Отвечаем на callback (убирает "часики" на кнопке в Telegram)
+        repository.answerCallbackQuery(callback.id)
+    }
+
+    /**
+     * Обрабатывает выбор значения temperature через callback.
+     *
+     * @param callback Callback-запрос
+     * @param data Callback данные в формате "set_temp:0.0"
+     * @param chatId ID чата
+     * @param messageId ID сообщения с кнопками
+     */
+    private suspend fun handleTemperatureCallback(
+        callback: CallbackQuery,
+        data: String,
+        chatId: Long,
+        messageId: Long
+    ) {
+        // Извлекаем значение temperature из callback данных
+        val temperatureValue = data.removePrefix("set_temp:").toDoubleOrNull() ?: return
+
+        // Устанавливаем новое значение temperature
+        SessionManager.setTemperature(chatId, temperatureValue)
+
+        // Получаем информацию о выбранной модели
+        val session = SessionManager.getSession(chatId)
+        val modelName = session.selectedModel?.displayName ?: "не выбрана"
+
+        // Редактируем сообщение: убираем кнопки и обновляем текст
+        repository.editMessageText(
+            chatId = chatId,
+            messageId = messageId,
+            text = "✓ Выбрана модель: $modelName\ntemperature: $temperatureValue (/temperature)"
         )
 
         // Отвечаем на callback (убирает "часики" на кнопке в Telegram)

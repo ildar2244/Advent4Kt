@@ -21,9 +21,11 @@ import kotlinx.coroutines.coroutineScope
  * - Если модель выбрана: отправляет запрос к AI с учетом текущего сценария
  *
  * Поддержка сценариев:
- * - FREE_CHAT: обычный диалог без дополнительных промптов
- * - JSON_FORMAT, CONSULTANT, STEP_BY_STEP: добавляется специальный system prompt
- * - EXPERTS: параллельные запросы к нескольким экспертам с разными промптами
+ * - FREE_CHAT: одиночный запрос без истории и дополнительных промптов
+ * - JSON_FORMAT: одиночный запрос с system prompt для JSON-ответов
+ * - CONSULTANT: использует историю диалога (до 20 последних сообщений) для контекстных ответов
+ * - STEP_BY_STEP: одиночный запрос с system prompt для пошагового решения
+ * - EXPERTS: параллельные независимые запросы к нескольким экспертам (без истории)
  */
 class HandleMessageUseCase(
     private val telegramRepository: TelegramRepository,
@@ -56,6 +58,7 @@ class HandleMessageUseCase(
      * Обрабатывает сообщение в режиме AI-консультации.
      * Отправляет запрос к AI-модели и возвращает ответ пользователю.
      * Применяет system prompt в зависимости от выбранного сценария.
+     * Для сценария CONSULTANT используется история сообщений, для остальных - одиночные запросы.
      *
      * @param chatId ID чата
      * @param userText Текст сообщения от пользователя
@@ -69,30 +72,43 @@ class HandleMessageUseCase(
         scenario: Scenario
     ) {
         try {
-            // Добавляем сообщение пользователя в историю
-            SessionManager.addMessage(
-                chatId,
-                AiMessage(role = MessageRole.USER, content = userText)
-            )
-
-            // Получаем историю диалога
             val session = SessionManager.getSession(chatId)
-            val conversationHistory = session.conversationHistory.toMutableList()
+            val isConsultantMode = scenario == Scenario.CONSULTANT
+
+            // Создаем сообщение пользователя
+            val userMessage = AiMessage(role = MessageRole.USER, content = userText)
+
+            // Определяем: сохранять ли в историю
+            val conversationHistory: MutableList<AiMessage> = if (isConsultantMode) {
+                // CONSULTANT: добавляем в историю и используем её
+                SessionManager.addMessage(chatId, userMessage)
+                session.conversationHistory.toMutableList()
+            } else {
+                // Остальные сценарии: создаем временный список только для этого запроса
+                mutableListOf(userMessage)
+            }
 
             // Добавляем system prompt в зависимости от сценария (если нужно)
             val systemPrompt = getSystemPromptForScenario(scenario)
             if (systemPrompt != null) {
-                // Добавляем system prompt в начало списка сообщений (перед первым USER сообщением)
-                // Находим индекс первого SYSTEM сообщения
-                val firstSystemIndex = conversationHistory.indexOfFirst { it.role == MessageRole.SYSTEM }
-                if (firstSystemIndex != -1) {
-                    // Заменяем существующий system prompt
-                    conversationHistory[firstSystemIndex] = AiMessage(
-                        role = MessageRole.SYSTEM,
-                        content = systemPrompt
-                    )
+                if (isConsultantMode) {
+                    // Для CONSULTANT: обновляем/добавляем в начало истории
+                    val firstSystemIndex = conversationHistory.indexOfFirst { it.role == MessageRole.SYSTEM }
+                    if (firstSystemIndex != -1) {
+                        // Заменяем существующий system prompt
+                        conversationHistory[firstSystemIndex] = AiMessage(
+                            role = MessageRole.SYSTEM,
+                            content = systemPrompt
+                        )
+                    } else {
+                        // Добавляем новый system prompt в начало
+                        conversationHistory.add(0, AiMessage(
+                            role = MessageRole.SYSTEM,
+                            content = systemPrompt
+                        ))
+                    }
                 } else {
-                    // Добавляем новый system prompt в начало
+                    // Для остальных сценариев: просто добавляем в начало временного списка
                     conversationHistory.add(0, AiMessage(
                         role = MessageRole.SYSTEM,
                         content = systemPrompt
@@ -100,24 +116,36 @@ class HandleMessageUseCase(
                 }
             }
 
-            // Создаем запрос к AI
+            // Создаем запрос к AI с температурой из сессии
             val aiRequest = AiRequest(
                 model = model,
                 messages = conversationHistory,
-                temperature = 0.7
+                temperature = session.temperature
             )
 
             // Отправляем запрос к AI
             val aiResponse = aiRepository.sendMessage(aiRequest)
 
-            // Добавляем ответ AI в историю
-            SessionManager.addMessage(
-                chatId,
-                AiMessage(role = MessageRole.ASSISTANT, content = aiResponse.content)
-            )
+            // Добавляем ответ AI в историю только для CONSULTANT
+            if (isConsultantMode) {
+                SessionManager.addMessage(
+                    chatId,
+                    AiMessage(role = MessageRole.ASSISTANT, content = aiResponse.content)
+                )
+            }
+
+            // Формируем ответ с информацией о модели и temperature
+            val responseText = buildString {
+                append(aiResponse.content)
+                append("\n\n")
+                append("```\n")
+                append("model: ${model.displayName}\n")
+                append("temperature: ${session.temperature}\n")
+                append("```")
+            }
 
             // Отправляем ответ пользователю
-            telegramRepository.sendMessage(chatId, aiResponse.content)
+            telegramRepository.sendMessage(chatId, responseText)
 
         } catch (e: Exception) {
             // Обрабатываем ошибки и отправляем понятное сообщение пользователю
@@ -148,6 +176,7 @@ class HandleMessageUseCase(
      * Обрабатывает сообщение в сценарии "Эксперты".
      * Отправляет несколько параллельных запросов к AI с разными system prompts.
      * Количество запросов определяется динамически размером списка Experts.list.
+     * Каждый запрос независим (без истории сообщений).
      *
      * @param chatId ID чата
      * @param userText Текст сообщения от пользователя
@@ -159,22 +188,14 @@ class HandleMessageUseCase(
         model: com.example.tgbot.domain.model.ai.AiModel
     ) {
         try {
-            // Добавляем сообщение пользователя в историю
-            SessionManager.addMessage(
-                chatId,
-                AiMessage(role = MessageRole.USER, content = userText)
-            )
-
-            // Получаем историю диалога (без system промптов для экспертов)
             val session = SessionManager.getSession(chatId)
-            val baseHistory = session.conversationHistory.toList()
 
             // Запускаем параллельные запросы к AI для каждого эксперта
             coroutineScope {
                 val deferredResponses = Experts.list.map { expert ->
                     async {
                         try {
-                            // Создаем историю с system prompt этого эксперта
+                            // Создаем независимый запрос для каждого эксперта
                             val expertHistory = mutableListOf<AiMessage>()
 
                             // Добавляем system prompt эксперта
@@ -185,14 +206,19 @@ class HandleMessageUseCase(
                                 )
                             )
 
-                            // Добавляем остальную историю диалога
-                            expertHistory.addAll(baseHistory)
+                            // Добавляем только ТЕКУЩЕЕ сообщение пользователя
+                            expertHistory.add(
+                                AiMessage(
+                                    role = MessageRole.USER,
+                                    content = userText
+                                )
+                            )
 
-                            // Создаем запрос к AI
+                            // Создаем запрос к AI с температурой из сессии
                             val aiRequest = AiRequest(
                                 model = model,
                                 messages = expertHistory,
-                                temperature = 0.7
+                                temperature = session.temperature
                             )
 
                             // Отправляем запрос к AI
@@ -211,23 +237,23 @@ class HandleMessageUseCase(
                 deferredResponses.forEach { deferred ->
                     val (expertName, response) = deferred.await()
 
+                    // Формируем ответ с информацией о модели и temperature
+                    val responseText = buildString {
+                        append("$expertName:\n\n")
+                        append(response)
+                        append("\n\n")
+                        append("```\n")
+                        append("model: ${model.displayName}\n")
+                        append("temperature: ${session.temperature}\n")
+                        append("```")
+                    }
+
                     // Отправляем ответ каждого эксперта отдельным сообщением
-                    telegramRepository.sendMessage(
-                        chatId,
-                        "$expertName:\n\n$response"
-                    )
+                    telegramRepository.sendMessage(chatId, responseText)
                 }
             }
 
-            // Добавляем объединенный ответ в историю (для контекста)
-            // Можно сохранить только факт обращения к экспертам
-            SessionManager.addMessage(
-                chatId,
-                AiMessage(
-                    role = MessageRole.ASSISTANT,
-                    content = "[Получены ответы от ${Experts.list.size} экспертов]"
-                )
-            )
+            // Сценарий EXPERTS не использует историю - каждый запрос независим
 
         } catch (e: Exception) {
             // Обрабатываем ошибки и отправляем понятное сообщение пользователю
