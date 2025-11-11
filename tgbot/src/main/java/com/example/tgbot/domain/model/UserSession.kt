@@ -2,11 +2,13 @@ package com.example.tgbot.domain.model
 
 import com.example.tgbot.domain.model.ai.AiMessage
 import com.example.tgbot.domain.model.ai.AiModel
+import com.example.tgbot.domain.model.ai.HuggingFaceModel
 
 /**
  * Сессия пользователя для отслеживания состояния диалога с AI.
  *
  * @property selectedModel Выбранная AI-модель (null, если модель не выбрана)
+ * @property selectedHuggingFaceModel Выбранная модель HuggingFace (используется когда selectedModel == HUGGING_FACE)
  * @property conversationHistory История сообщений в диалоге с AI.
  *                               Используется только для сценария CONSULTANT.
  *                               Для остальных сценариев каждый запрос независим.
@@ -16,6 +18,7 @@ import com.example.tgbot.domain.model.ai.AiModel
  */
 data class UserSession(
     val selectedModel: AiModel? = null,
+    val selectedHuggingFaceModel: HuggingFaceModel = HuggingFaceModel.DEFAULT,
     val conversationHistory: MutableList<AiMessage> = mutableListOf(),
     val currentScenario: Scenario = Scenario.DEFAULT,
     val temperature: Double = 0.7
@@ -83,6 +86,19 @@ object SessionManager {
     fun setTemperature(chatId: Long, temperature: Double) {
         val session = getSession(chatId)
         sessions[chatId] = session.copy(temperature = temperature)
+    }
+
+    /**
+     * Устанавливает выбранную модель HuggingFace для пользователя.
+     * История сообщений очищается при смене модели.
+     *
+     * @param chatId ID чата пользователя
+     * @param hfModel Выбранная модель HuggingFace
+     */
+    fun setHuggingFaceModel(chatId: Long, hfModel: HuggingFaceModel) {
+        val session = getSession(chatId)
+        session.conversationHistory.clear()
+        sessions[chatId] = session.copy(selectedHuggingFaceModel = hfModel)
     }
 
     /**

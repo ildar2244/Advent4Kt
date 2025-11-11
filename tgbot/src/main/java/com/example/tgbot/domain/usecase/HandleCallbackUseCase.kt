@@ -14,9 +14,12 @@ import com.example.tgbot.domain.repository.TelegramRepository
  * Use case для обработки callback-запросов от инлайн-кнопок.
  *
  * Обрабатываемые типы callback'ов:
- * - "show_models" - Показать список AI-моделей (из команды /start)
+ * - "show_models" - Показать список AI-провайдеров (из команды /start)
  * - "model_gpt", "model_claude", "model_yandex" - Выбор конкретной AI-модели
+ * - "model_huggingface" - Показать список моделей HuggingFace
+ * - "hf_model:*" - Выбор конкретной модели HuggingFace
  * - "scenario_*" - Выбор сценария взаимодействия (динамически из Scenario enum)
+ * - "set_temp:*" - Установка значения temperature
  *
  * При выборе модели:
  * - Сохраняется выбранная модель в сессию пользователя
@@ -56,6 +59,18 @@ class HandleCallbackUseCase(
         // Проверяем, является ли callback изменением temperature
         if (data.startsWith("set_temp:")) {
             handleTemperatureCallback(callback, data, message.chatId, message.messageId)
+            return
+        }
+
+        // Проверяем, является ли callback выбором провайдера HuggingFace
+        if (data == "model_huggingface") {
+            handleHuggingFaceProviderCallback(callback, message.chatId, message.messageId)
+            return
+        }
+
+        // Проверяем, является ли callback выбором конкретной модели HuggingFace
+        if (data.startsWith("hf_model:")) {
+            handleHuggingFaceModelCallback(callback, data, message.chatId, message.messageId)
             return
         }
 
@@ -147,7 +162,7 @@ class HandleCallbackUseCase(
         chatId: Long,
         messageId: Long
     ) {
-        // Создаем клавиатуру с кнопками AI-моделей
+        // Создаем клавиатуру с кнопками AI-провайдеров
         val keyboard = InlineKeyboard(
             rows = listOf(
                 listOf(
@@ -164,6 +179,10 @@ class HandleCallbackUseCase(
                     InlineKeyboardButton(
                         text = AiModel.YANDEX_GPT_LITE.displayName,
                         callbackData = "model_yandex"
+                    ),
+                    InlineKeyboardButton(
+                        text = AiModel.HUGGING_FACE.displayName,
+                        callbackData = "model_huggingface"
                     )
                 )
             )
@@ -216,6 +235,115 @@ class HandleCallbackUseCase(
             chatId = chatId,
             messageId = messageId,
             text = "✓ Выбрана модель: $modelName\ntemperature: $temperatureValue (/temperature)"
+        )
+
+        // Отвечаем на callback (убирает "часики" на кнопке в Telegram)
+        repository.answerCallbackQuery(callback.id)
+    }
+
+    /**
+     * Обрабатывает выбор провайдера HuggingFace.
+     * Показывает список доступных моделей HuggingFace для выбора.
+     *
+     * @param callback Callback-запрос
+     * @param chatId ID чата
+     * @param messageId ID сообщения с кнопками
+     */
+    private suspend fun handleHuggingFaceProviderCallback(
+        callback: CallbackQuery,
+        chatId: Long,
+        messageId: Long
+    ) {
+        // Импортируем HuggingFaceModel
+        val hfModels = com.example.tgbot.domain.model.ai.HuggingFaceModel.values()
+
+        // Создаем кнопки для каждой модели HuggingFace
+        val buttons = hfModels.map { model ->
+            InlineKeyboardButton(
+                text = model.displayName,
+                callbackData = "hf_model:${model.modelId}"
+            )
+        }
+
+        // Размещаем по 1 кнопке в ряд для лучшей читаемости
+        val rows = buttons.map { listOf(it) }
+
+        val keyboard = InlineKeyboard(rows = rows)
+
+        // Редактируем сообщение: меняем текст и показываем модели HuggingFace
+        repository.editMessageText(
+            chatId = chatId,
+            messageId = messageId,
+            text = "Выберите модель HuggingFace:"
+        )
+
+        // Отправляем новое сообщение с клавиатурой моделей
+        repository.sendMessageWithKeyboard(
+            chatId = chatId,
+            text = "Выберите модель HuggingFace:",
+            keyboard = keyboard
+        )
+
+        // Отвечаем на callback (убирает "часики" на кнопке в Telegram)
+        repository.answerCallbackQuery(callback.id)
+    }
+
+    /**
+     * Обрабатывает выбор конкретной модели HuggingFace.
+     * Устанавливает выбранную модель HF в сессию и выбирает HUGGING_FACE как провайдера.
+     *
+     * @param callback Callback-запрос
+     * @param data Callback данные в формате "hf_model:{modelId}"
+     * @param chatId ID чата
+     * @param messageId ID сообщения с кнопками
+     */
+    private suspend fun handleHuggingFaceModelCallback(
+        callback: CallbackQuery,
+        data: String,
+        chatId: Long,
+        messageId: Long
+    ) {
+        // Извлекаем modelId из callback данных
+        val modelId = data.removePrefix("hf_model:")
+
+        // Находим модель по modelId
+        val hfModel = com.example.tgbot.domain.model.ai.HuggingFaceModel.findByModelId(modelId)
+
+        if (hfModel == null) {
+            // Если модель не найдена, отвечаем на callback и выходим
+            repository.answerCallbackQuery(callback.id)
+            return
+        }
+
+        // Устанавливаем провайдера HUGGING_FACE
+        SessionManager.setModel(chatId, AiModel.HUGGING_FACE)
+
+        // Устанавливаем конкретную модель HuggingFace
+        SessionManager.setHuggingFaceModel(chatId, hfModel)
+
+        // Сбрасываем сценарий на "Просто чат" при выборе модели
+        SessionManager.setScenario(chatId, Scenario.DEFAULT)
+
+        // Получаем текущее значение temperature из сессии
+        val updatedSession = SessionManager.getSession(chatId)
+        val currentTemperature = updatedSession.temperature
+
+        // Редактируем сообщение: убираем кнопки и меняем текст на подтверждение выбора
+        repository.editMessageText(
+            chatId = chatId,
+            messageId = messageId,
+            text = "✓ Выбрана модель: ${AiModel.HUGGING_FACE.displayName} - ${hfModel.displayName}\ntemperature: $currentTemperature (/temperature)"
+        )
+
+        // Отправляем приветственное сообщение с инструкциями
+        repository.sendMessage(
+            chatId = chatId,
+            text = "Я готов ответить на ваши вопросы с помощью ${hfModel.displayName} (HuggingFace).\n\n" +
+                    "Напишите ваше сообщение, и я отвечу.\n\n" +
+                    "⚠️ Первый запрос может занять до 30 секунд (модель загружается).\n\n" +
+                    "Используйте /hf_models для смены модели HuggingFace.\n" +
+                    "Используйте /temperature для изменения параметра генерации.\n" +
+                    "Используйте /stop для выхода из режима AI-консультации."
         )
 
         // Отвечаем на callback (убирает "часики" на кнопке в Telegram)

@@ -120,7 +120,12 @@ class HandleMessageUseCase(
             val aiRequest = AiRequest(
                 model = model,
                 messages = conversationHistory,
-                temperature = session.temperature
+                temperature = session.temperature,
+                huggingFaceModel = if (model == com.example.tgbot.domain.model.ai.AiModel.HUGGING_FACE) {
+                    session.selectedHuggingFaceModel
+                } else {
+                    null
+                }
             )
 
             // Отправляем запрос к AI
@@ -134,12 +139,35 @@ class HandleMessageUseCase(
                 )
             }
 
-            // Формируем ответ с информацией о модели и temperature
+            // Формируем ответ с информацией о модели, temperature и статистикой
             val responseText = buildString {
                 append(aiResponse.content)
                 append("\n\n")
+
+                // Добавляем статистику времени выполнения
+                aiResponse.responseTimeMillis?.let { time ->
+                    append("\uD83D\uDD52 Время ответа: ${time} мс\n")
+                }
+
+                // Добавляем статистику токенов
+                aiResponse.tokenUsage?.let { usage ->
+                    append("\uD83D\uDD22 Токены:\n")
+                    append("  - запрос: ${usage.promptTokens}\n")
+                    append("  - ответ: ${usage.completionTokens}\n")
+                    append("  - всего: ${usage.totalTokens}\n")
+                } ?: run {
+                    append("\uD83D\uDD22 Токены: n/a\n")
+                }
+
+                append("\n")
                 append("```\n")
-                append("model: ${model.displayName}\n")
+                // Для HuggingFace показываем конкретную модель
+                val modelName = if (model == com.example.tgbot.domain.model.ai.AiModel.HUGGING_FACE) {
+                    session.selectedHuggingFaceModel?.displayName ?: model.displayName
+                } else {
+                    model.displayName
+                }
+                append("model: $modelName\n")
                 append("temperature: ${session.temperature}\n")
                 append("```")
             }
@@ -218,32 +246,64 @@ class HandleMessageUseCase(
                             val aiRequest = AiRequest(
                                 model = model,
                                 messages = expertHistory,
-                                temperature = session.temperature
+                                temperature = session.temperature,
+                                huggingFaceModel = if (model == com.example.tgbot.domain.model.ai.AiModel.HUGGING_FACE) {
+                                    session.selectedHuggingFaceModel
+                                } else {
+                                    null
+                                }
                             )
 
                             // Отправляем запрос к AI
                             val aiResponse = aiRepository.sendMessage(aiRequest)
 
-                            // Возвращаем пару: имя эксперта и ответ
-                            expert.name to aiResponse.content
+                            // Возвращаем тройку: имя эксперта, ответ и статистику
+                            Triple(expert.name, aiResponse.content, aiResponse)
                         } catch (e: Exception) {
-                            // В случае ошибки возвращаем сообщение об ошибке
-                            expert.name to "Ошибка: ${e.message}"
+                            // В случае ошибки возвращаем null для aiResponse
+                            Triple(expert.name, "Ошибка: ${e.message}", null)
                         }
                     }
                 }
 
                 // Получаем ответы по мере их поступления
                 deferredResponses.forEach { deferred ->
-                    val (expertName, response) = deferred.await()
+                    val (expertName, response, aiResponse) = deferred.await()
 
-                    // Формируем ответ с информацией о модели и temperature
+                    // Формируем ответ с информацией о модели, temperature и статистикой
                     val responseText = buildString {
                         append("$expertName:\n\n")
                         append(response)
                         append("\n\n")
+
+                        // Добавляем статистику, если она доступна
+                        aiResponse?.let { resp ->
+                            // Статистика времени выполнения
+                            resp.responseTimeMillis?.let { time ->
+                                append("\uD83D\uDD52 Время ответа: ${time} мс\n")
+                            }
+
+                            // Статистика токенов
+                            resp.tokenUsage?.let { usage ->
+                                append("\uD83D\uDD22 Токены:\n")
+                                append("  - запрос: ${usage.promptTokens}\n")
+                                append("  - ответ: ${usage.completionTokens}\n")
+                                append("  - всего: ${usage.totalTokens}\n")
+                            } ?: run {
+                                append("\uD83D\uDD22 Токены: n/a\n")
+                            }
+
+                            append("\n")
+                        }
+
                         append("```\n")
-                        append("model: ${model.displayName}\n")
+                        // Для HuggingFace показываем конкретную модель
+                        val modelName = if (model == com.example.tgbot.domain.model.ai.AiModel.HUGGING_FACE) {
+                            session.selectedHuggingFaceModel?.displayName ?: model.displayName
+                        } else {
+                            model.displayName
+                        }
+                        append("model: $modelName\n")
                         append("temperature: ${session.temperature}\n")
                         append("```")
                     }

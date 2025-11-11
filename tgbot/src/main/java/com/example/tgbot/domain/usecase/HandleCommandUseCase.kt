@@ -13,7 +13,8 @@ import com.example.tgbot.domain.repository.TelegramRepository
  *
  * Поддерживаемые команды:
  * - /start - Приветственное сообщение с кнопкой выбора модели
- * - /models - Выбор AI-модели (GPT-4o Mini, Claude 3.5 Haiku, YandexGPT Lite)
+ * - /models - Выбор AI-провайдера (GPT-4o Mini, Claude 3.5 Haiku, YandexGPT Lite, HuggingFace)
+ * - /hf_models - Выбор конкретной модели HuggingFace (DialoGPT, Bloomz, Mistral, Llama, Phi-3)
  * - /temperature - Настройка параметра temperature для генерации ответов AI
  * - /scenario - Выбор сценария взаимодействия с AI
  * - /free-chat, /json-format, /consultant, /step-by-step, /experts - Прямая активация сценариев
@@ -36,6 +37,7 @@ class HandleCommandUseCase(
         when {
             command == "/start" -> handleStartCommand(message.chatId)
             command == "/models" -> handleModelsCommand(message.chatId)
+            command == "/hf_models" -> handleHuggingFaceModelsCommand(message.chatId)
             command == "/temperature" -> handleTemperatureCommand(message.chatId)
             command == "/scenario" -> handleScenarioCommand(message.chatId)
             command == "/stop" -> handleStopCommand(message.chatId)
@@ -99,6 +101,10 @@ class HandleCommandUseCase(
                     InlineKeyboardButton(
                         text = AiModel.YANDEX_GPT_LITE.displayName,
                         callbackData = "model_yandex"
+                    ),
+                    InlineKeyboardButton(
+                        text = AiModel.HUGGING_FACE.displayName,
+                        callbackData = "model_huggingface"
                     )
                 )
             )
@@ -106,7 +112,38 @@ class HandleCommandUseCase(
 
         repository.sendMessageWithKeyboard(
             chatId = chatId,
-            text = "Выберите AI-модель для диалога:",
+            text = "Выберите AI-провайдера для диалога:",
+            keyboard = keyboard
+        )
+    }
+
+    /**
+     * Обрабатывает команду /hf_models.
+     * Отправляет сообщение с инлайн-кнопками для выбора конкретной модели HuggingFace.
+     * Кнопки генерируются динамически на основе HuggingFaceModel enum.
+     *
+     * @param chatId ID чата, в который нужно отправить сообщение
+     */
+    private suspend fun handleHuggingFaceModelsCommand(chatId: Long) {
+        // Импортируем HuggingFaceModel
+        val hfModels = com.example.tgbot.domain.model.ai.HuggingFaceModel.values()
+
+        // Создаем кнопки для каждой модели HuggingFace
+        val buttons = hfModels.map { model ->
+            InlineKeyboardButton(
+                text = model.displayName,
+                callbackData = "hf_model:${model.modelId}"
+            )
+        }
+
+        // Размещаем по 1 кнопке в ряд для лучшей читаемости
+        val rows = buttons.map { listOf(it) }
+
+        val keyboard = InlineKeyboard(rows = rows)
+
+        repository.sendMessageWithKeyboard(
+            chatId = chatId,
+            text = "Выберите модель HuggingFace:",
             keyboard = keyboard
         )
     }

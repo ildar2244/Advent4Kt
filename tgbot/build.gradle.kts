@@ -34,6 +34,7 @@ buildConfig {
     buildConfigField("String", "CLAUDE_API_KEY", "\"${localProperties.getProperty("CLAUDE_API_KEY", "")}\"")
     buildConfigField("String", "YANDEX_GPT_API_KEY", "\"${localProperties.getProperty("YANDEX_GPT_API_KEY", "")}\"")
     buildConfigField("String", "YANDEX_CLOUD_FOLDER_ID", "\"${localProperties.getProperty("YANDEX_CLOUD_FOLDER_ID", "")}\"")
+    buildConfigField("String", "HUGGING_FACE_API_KEY", "\"${localProperties.getProperty("HUGGING_FACE_API_KEY", "")}\"")
 }
 
 dependencies {

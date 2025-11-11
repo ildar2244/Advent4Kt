@@ -2,6 +2,7 @@ package com.example.tgbot.data.repository
 
 import com.example.tgbot.data.remote.ai.AiApiClient
 import com.example.tgbot.data.remote.ai.ClaudeApiClient
+import com.example.tgbot.data.remote.ai.HuggingFaceApiClient
 import com.example.tgbot.data.remote.ai.OpenAiApiClient
 import com.example.tgbot.data.remote.ai.YandexGptApiClient
 import com.example.tgbot.domain.model.ai.AiModel
@@ -14,16 +15,18 @@ import com.example.tgbot.domain.repository.AiRepository
  *
  * Выполняет маршрутизацию запросов к соответствующему API клиенту
  * в зависимости от выбранной модели. Инкапсулирует детали работы
- * с различными AI-провайдерами (OpenAI, Claude, YandexGPT).
+ * с различными AI-провайдерами (OpenAI, Claude, YandexGPT, HuggingFace).
  *
  * @property openAiClient Клиент для работы с моделями OpenAI
  * @property claudeClient Клиент для работы с моделями Claude
  * @property yandexGptClient Клиент для работы с моделями YandexGPT
+ * @property huggingFaceClient Клиент для работы с моделями HuggingFace
  */
 class AiRepositoryImpl(
     private val openAiClient: OpenAiApiClient,
     private val claudeClient: ClaudeApiClient,
-    private val yandexGptClient: YandexGptApiClient
+    private val yandexGptClient: YandexGptApiClient,
+    private val huggingFaceClient: HuggingFaceApiClient
 ) : AiRepository {
 
     /**
@@ -39,6 +42,7 @@ class AiRepositoryImpl(
             AiModel.GPT_4O_MINI -> openAiClient
             AiModel.CLAUDE_HAIKU -> claudeClient
             AiModel.YANDEX_GPT_LITE -> yandexGptClient
+            AiModel.HUGGING_FACE -> huggingFaceClient
         }
 
         return client.sendMessage(request)

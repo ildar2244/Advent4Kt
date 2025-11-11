@@ -3,6 +3,7 @@ package com.example.tgbot.app
 import com.example.tgbot.BuildConfig
 import com.example.tgbot.data.remote.TelegramApi
 import com.example.tgbot.data.remote.ai.ClaudeApiClient
+import com.example.tgbot.data.remote.ai.HuggingFaceApiClient
 import com.example.tgbot.data.remote.ai.OpenAiApiClient
 import com.example.tgbot.data.remote.ai.YandexGptApiClient
 import com.example.tgbot.data.repository.AiRepositoryImpl
@@ -64,7 +65,16 @@ class TelegramBot(private val token: String) {
         BuildConfig.YANDEX_GPT_API_KEY,
         BuildConfig.YANDEX_CLOUD_FOLDER_ID
     )
-    private val aiRepository = AiRepositoryImpl(openAiClient, claudeClient, yandexGptClient)
+    private val huggingFaceClient = HuggingFaceApiClient(
+        client = httpClient,
+        apiKey = BuildConfig.HUGGING_FACE_API_KEY
+    )
+    private val aiRepository = AiRepositoryImpl(
+        openAiClient,
+        claudeClient,
+        yandexGptClient,
+        huggingFaceClient
+    )
 
     // Инициализация use cases
     private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository)

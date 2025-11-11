@@ -39,6 +39,17 @@ enum class AiModel(
         displayName = "YandexGPT Lite",
         modelId = "yandexgpt-lite",
         endpoint = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+    ),
+
+    /**
+     * HuggingFace - платформа с множеством открытых моделей.
+     * Использует Router API с OpenAI-совместимым форматом.
+     * modelId переопределяется в runtime через HuggingFaceModel enum.
+     */
+    HUGGING_FACE(
+        displayName = "HuggingFace 🤗",
+        modelId = "",
+        endpoint = "https://router.huggingface.co/v1/chat/completions"
     );
 
     companion object {
