@@ -39,12 +39,14 @@ class YandexGptApiClient(
         val requestDto = request.toYandexGptDto(folderId)
         println("REQUEST to YANDEX_GPT: $requestDto")
 
+        val startTime = System.currentTimeMillis()
         val response: YandexGptCompletionResponse = client.post(request.model.endpoint) {
             contentType(ContentType.Application.Json)
             header("Authorization", "Api-Key $apiKey")
             setBody(requestDto)
         }.body()
+        val responseTimeMillis = System.currentTimeMillis() - startTime
 
-        return response.toDomain(request)
+        return response.toDomain(request, responseTimeMillis)
     }
 }

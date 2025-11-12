@@ -7,6 +7,7 @@ import com.example.tgbot.domain.model.ai.AiMessage
 import com.example.tgbot.domain.model.ai.AiRequest
 import com.example.tgbot.domain.model.ai.AiResponse
 import com.example.tgbot.domain.model.ai.MessageRole
+import com.example.tgbot.domain.model.ai.TokenUsage
 
 /**
  * Преобразует доменную модель AiRequest в DTO для OpenAI Chat Completions API.
@@ -51,12 +52,23 @@ fun AiMessage.toOpenAiDto(): OpenAiMessageDto {
  * @return Доменная модель ответа
  * @throws IllegalStateException если ответ не содержит вариантов (choices)
  */
-fun OpenAiChatResponse.toDomain(request: AiRequest): AiResponse {
+fun OpenAiChatResponse.toDomain(
+    request: AiRequest,
+    responseTimeMillis: Long,
+): AiResponse {
     val content = choices.firstOrNull()?.message?.content
         ?: throw IllegalStateException("OpenAI response has no choices")
 
+    val tokenUsage = TokenUsage(
+        promptTokens = usage?.promptTokens ?: 0,
+        completionTokens = usage?.completionTokens ?: 0,
+        totalTokens = usage?.totalTokens ?: 0,
+    )
+
     return AiResponse(
         content = content,
-        model = request.model
+        model = request.model,
+        responseTimeMillis = responseTimeMillis,
+        tokenUsage = tokenUsage,
     )
 }

@@ -7,6 +7,7 @@ import com.example.tgbot.domain.model.ai.AiMessage
 import com.example.tgbot.domain.model.ai.AiRequest
 import com.example.tgbot.domain.model.ai.AiResponse
 import com.example.tgbot.domain.model.ai.MessageRole
+import com.example.tgbot.domain.model.ai.TokenUsage
 
 /**
  * Преобразует доменную модель AiRequest в DTO для Claude Messages API.
@@ -77,11 +78,20 @@ fun AiMessage.toClaudeDto(): ClaudeMessageDto {
  * @return Доменная модель ответа
  * @throws IllegalStateException если ответ содержит ошибку или не содержит текстового контента
  */
-fun ClaudeMessageResponse.toDomain(request: AiRequest): AiResponse {
+fun ClaudeMessageResponse.toDomain(
+    request: AiRequest,
+    responseTimeMillis: Long,
+): AiResponse {
     // Проверяем наличие ошибки в ответе
     error?.let {
         throw IllegalStateException("Claude API error: ${it.type} - ${it.message}")
     }
+
+    val tokenUsage = TokenUsage(
+        promptTokens = usage?.inputTokens ?: 0,
+        completionTokens = usage?.outputTokens ?: 0,
+        totalTokens = ((usage?.inputTokens ?: 0) + (usage?.outputTokens ?: 0)),
+    )
 
     // Извлекаем текстовый контент
     val text = content?.firstOrNull { it.type == "text" }?.text
@@ -89,6 +99,8 @@ fun ClaudeMessageResponse.toDomain(request: AiRequest): AiResponse {
 
     return AiResponse(
         content = text,
-        model = request.model
+        model = request.model,
+        responseTimeMillis = responseTimeMillis,
+        tokenUsage = tokenUsage,
     )
 }

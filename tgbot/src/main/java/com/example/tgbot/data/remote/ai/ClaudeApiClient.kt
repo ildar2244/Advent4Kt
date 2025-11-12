@@ -47,9 +47,10 @@ class ClaudeApiClient(
         // Логируем JSON тела запроса для отладки
         val json = Json { prettyPrint = true }
         val requestJson = json.encodeToString(requestDto)
-        println("Claude API Request JSON:\n$requestJson")
+//        println("Claude API Request JSON:\n$requestJson")
 
         try {
+            val startTime = System.currentTimeMillis()
             val httpResponse: HttpResponse = client.post(request.model.endpoint) {
                 contentType(ContentType.Application.Json)
                 // Claude требует специальные заголовки
@@ -57,6 +58,7 @@ class ClaudeApiClient(
                 header("anthropic-version", "2023-06-01")
                 setBody(requestDto)
             }
+            val responseTimeMillis = System.currentTimeMillis() - startTime
 
             // Если ответ не успешный, выводим тело ошибки для диагностики
             if (!httpResponse.status.isSuccess()) {
@@ -66,7 +68,7 @@ class ClaudeApiClient(
             }
 
             val response: ClaudeMessageResponse = httpResponse.body()
-            return response.toDomain(request)
+            return response.toDomain(request, responseTimeMillis)
 
         } catch (e: Exception) {
             println("Claude API Exception: ${e.message}")

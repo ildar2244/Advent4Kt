@@ -8,6 +8,7 @@ import com.example.tgbot.domain.model.ai.AiMessage
 import com.example.tgbot.domain.model.ai.AiRequest
 import com.example.tgbot.domain.model.ai.AiResponse
 import com.example.tgbot.domain.model.ai.MessageRole
+import com.example.tgbot.domain.model.ai.TokenUsage
 
 /**
  * Преобразует доменную модель AiRequest в DTO для YandexGPT Completion API.
@@ -59,12 +60,32 @@ fun AiMessage.toYandexGptDto(): YandexGptMessageDto {
  * @return Доменная модель ответа
  * @throws IllegalStateException если ответ не содержит альтернатив
  */
-fun YandexGptCompletionResponse.toDomain(request: AiRequest): AiResponse {
+fun YandexGptCompletionResponse.toDomain(
+    request: AiRequest,
+    responseTimeMillis: Long,
+): AiResponse {
     val text = result.alternatives.firstOrNull()?.message?.text
         ?: throw IllegalStateException("YandexGPT response has no alternatives")
 
+    val tokenUsage = TokenUsage(
+        promptTokens = result.usage.inputTextTokens.toIntDtoParam(),
+        completionTokens = result.usage.completionTokens.toIntDtoParam(),
+        totalTokens = result.usage.totalTokens.toIntDtoParam(),
+    )
+
     return AiResponse(
         content = text,
-        model = request.model
+        model = request.model,
+        responseTimeMillis = responseTimeMillis,
+        tokenUsage = tokenUsage,
     )
+}
+
+private fun String.toIntDtoParam(): Int {
+    return try {
+        this.toInt()
+    } catch (e: Exception) {
+        println("Error parsing YandexGptDto tokens: ${e.message}")
+        0
+    }
 }

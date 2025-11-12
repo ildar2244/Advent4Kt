@@ -36,7 +36,7 @@ enum class AiModel(
      * YandexGPT Lite от Yandex Cloud.
      */
     YANDEX_GPT_LITE(
-        displayName = "YandexGPT Lite",
+        displayName = "YandexGPT",
         modelId = "yandexgpt-lite",
         endpoint = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
     ),

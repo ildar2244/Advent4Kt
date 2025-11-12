@@ -144,6 +144,7 @@ class HandleMessageUseCase(
                 append(aiResponse.content)
                 append("\n\n")
 
+                append("========================\n")
                 // Добавляем статистику времени выполнения
                 aiResponse.responseTimeMillis?.let { time ->
                     append("\uD83D\uDD52 Время ответа: ${time} мс\n")
@@ -160,7 +161,6 @@ class HandleMessageUseCase(
                 }
 
                 append("\n")
-                append("```\n")
                 // Для HuggingFace показываем конкретную модель
                 val modelName = if (model == com.example.tgbot.domain.model.ai.AiModel.HUGGING_FACE) {
                     session.selectedHuggingFaceModel?.displayName ?: model.displayName
@@ -169,7 +169,6 @@ class HandleMessageUseCase(
                 }
                 append("model: $modelName\n")
                 append("temperature: ${session.temperature}\n")
-                append("```")
             }
 
             // Отправляем ответ пользователю
@@ -276,6 +275,7 @@ class HandleMessageUseCase(
                         append(response)
                         append("\n\n")
 
+                        append("========================\n")
                         // Добавляем статистику, если она доступна
                         aiResponse?.let { resp ->
                             // Статистика времени выполнения
@@ -296,7 +296,7 @@ class HandleMessageUseCase(
                             append("\n")
                         }
 
-                        append("```\n")
+                        append("\n")
                         // Для HuggingFace показываем конкретную модель
                         val modelName = if (model == com.example.tgbot.domain.model.ai.AiModel.HUGGING_FACE) {
                             session.selectedHuggingFaceModel?.displayName ?: model.displayName
@@ -305,7 +305,6 @@ class HandleMessageUseCase(
                         }
                         append("model: $modelName\n")
                         append("temperature: ${session.temperature}\n")
-                        append("```")
                     }
 
                     // Отправляем ответ каждого эксперта отдельным сообщением

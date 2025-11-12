@@ -36,12 +36,14 @@ class OpenAiApiClient(
         val requestDto = request.toOpenAiDto()
         println("REQUEST to OPENAI: $requestDto")
 
+        val startTime = System.currentTimeMillis()
         val response: OpenAiChatResponse = client.post(request.model.endpoint) {
             contentType(ContentType.Application.Json)
             header("Authorization", "Bearer $apiKey")
             setBody(requestDto)
         }.body()
+        val responseTimeMillis = System.currentTimeMillis() - startTime
 
-        return response.toDomain(request)
+        return response.toDomain(request, responseTimeMillis)
     }
 }
