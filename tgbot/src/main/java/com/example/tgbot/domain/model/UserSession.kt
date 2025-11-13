@@ -10,18 +10,23 @@ import com.example.tgbot.domain.model.ai.HuggingFaceModel
  * @property selectedModel Выбранная AI-модель (null, если модель не выбрана)
  * @property selectedHuggingFaceModel Выбранная модель HuggingFace (используется когда selectedModel == HUGGING_FACE)
  * @property conversationHistory История сообщений в диалоге с AI.
- *                               Используется только для сценария CONSULTANT.
+ *                               Используется для сценариев CONSULTANT и COMPRESSION.
  *                               Для остальных сценариев каждый запрос независим.
  *                               Автоматически ограничивается 20 последними сообщениями.
  * @property currentScenario Текущий сценарий взаимодействия с AI
  * @property temperature Параметр temperature для генерации ответов AI (0.0 - 1.0)
+ * @property lastPromptTokens Точное количество токенов из последнего ответа API (promptTokens).
+ *                            Используется для гибридного метода подсчёта токенов.
+ * @property compressionCount Количество выполненных компрессий истории в текущей сессии
  */
 data class UserSession(
     val selectedModel: AiModel? = null,
     val selectedHuggingFaceModel: HuggingFaceModel = HuggingFaceModel.DEFAULT,
     val conversationHistory: MutableList<AiMessage> = mutableListOf(),
     val currentScenario: Scenario = Scenario.DEFAULT,
-    val temperature: Double = 0.7
+    val temperature: Double = 0.7,
+    val lastPromptTokens: Int = 0,
+    val compressionCount: Int = 0
 )
 
 /**
@@ -50,7 +55,7 @@ object SessionManager {
     /**
      * Устанавливает выбранную модель для пользователя.
      * При смене модели температура сбрасывается на значение по умолчанию (0.7),
-     * а история сообщений очищается.
+     * история сообщений очищается, а счётчики токенов обнуляются.
      *
      * @param chatId ID чата пользователя
      * @param model Выбранная AI-модель
@@ -58,20 +63,25 @@ object SessionManager {
     fun setModel(chatId: Long, model: AiModel) {
         val session = getSession(chatId)
         session.conversationHistory.clear()
-        sessions[chatId] = session.copy(selectedModel = model, temperature = 0.7)
+        sessions[chatId] = session.copy(
+            selectedModel = model,
+            temperature = 0.7,
+            lastPromptTokens = 0,
+            compressionCount = 0
+        )
     }
 
     /**
      * Устанавливает текущий сценарий для пользователя.
-     * Если переходим НЕ на CONSULTANT, история очищается.
+     * Если переходим НЕ на CONSULTANT или COMPRESSION, история очищается.
      *
      * @param chatId ID чата пользователя
      * @param scenario Выбранный сценарий
      */
     fun setScenario(chatId: Long, scenario: Scenario) {
         val session = getSession(chatId)
-        // Очищаем историю при переходе на любой сценарий кроме CONSULTANT
-        if (scenario != Scenario.CONSULTANT) {
+        // Очищаем историю при переходе на любой сценарий кроме CONSULTANT и COMPRESSION
+        if (scenario != Scenario.CONSULTANT && scenario != Scenario.COMPRESSION) {
             session.conversationHistory.clear()
         }
         sessions[chatId] = session.copy(currentScenario = scenario)
@@ -104,7 +114,7 @@ object SessionManager {
     /**
      * Добавляет сообщение в историю диалога.
      * Автоматически ограничивает историю последними 20 сообщениями.
-     * Используется только для сценария CONSULTANT.
+     * Используется для сценариев CONSULTANT и COMPRESSION.
      *
      * @param chatId ID чата пользователя
      * @param message Сообщение для добавления в историю
@@ -121,6 +131,44 @@ object SessionManager {
                 session.conversationHistory.removeAt(0)
             }
         }
+    }
+
+    /**
+     * Сохраняет точное количество токенов из последнего ответа API.
+     * Используется для гибридного метода подсчёта токенов.
+     *
+     * @param chatId ID чата пользователя
+     * @param promptTokens Точное количество токенов из поля `promptTokens` в ответе API
+     */
+    fun updatePromptTokens(chatId: Long, promptTokens: Int) {
+        val session = getSession(chatId)
+        sessions[chatId] = session.copy(lastPromptTokens = promptTokens)
+    }
+
+    /**
+     * Увеличивает счётчик выполненных компрессий истории.
+     *
+     * @param chatId ID чата пользователя
+     */
+    fun incrementCompressionCount(chatId: Long) {
+        val session = getSession(chatId)
+        sessions[chatId] = session.copy(compressionCount = session.compressionCount + 1)
+    }
+
+    /**
+     * Заменяет всю историю диалога новым списком сообщений.
+     * Используется при компрессии истории (замена на summary).
+     * Счётчик токенов сбрасывается, так как история изменена.
+     *
+     * @param chatId ID чата пользователя
+     * @param newHistory Новая история (обычно содержит только summary)
+     */
+    fun replaceHistory(chatId: Long, newHistory: List<AiMessage>) {
+        val session = getSession(chatId)
+        sessions[chatId] = session.copy(
+            conversationHistory = newHistory.toMutableList(),
+            lastPromptTokens = 0  // Сбросить, пересчитается при следующем запросе
+        )
     }
 
     /**

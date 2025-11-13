@@ -6,10 +6,13 @@ import com.example.tgbot.domain.model.Scenario
 import com.example.tgbot.domain.model.SessionManager
 import com.example.tgbot.domain.model.SystemPrompts
 import com.example.tgbot.domain.model.ai.AiMessage
+import com.example.tgbot.domain.model.ai.AiModel
 import com.example.tgbot.domain.model.ai.AiRequest
 import com.example.tgbot.domain.model.ai.MessageRole
 import com.example.tgbot.domain.repository.AiRepository
 import com.example.tgbot.domain.repository.TelegramRepository
+import com.example.tgbot.domain.service.HistoryCompressor
+import com.example.tgbot.domain.util.TokenCounter
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 
@@ -25,11 +28,13 @@ import kotlinx.coroutines.coroutineScope
  * - JSON_FORMAT: одиночный запрос с system prompt для JSON-ответов
  * - CONSULTANT: использует историю диалога (до 20 последних сообщений) для контекстных ответов
  * - STEP_BY_STEP: одиночный запрос с system prompt для пошагового решения
+ * - COMPRESSION: использует историю с автоматической компрессией при превышении лимита токенов (YandexGPT Lite)
  * - EXPERTS: параллельные независимые запросы к нескольким экспертам (без истории)
  */
 class HandleMessageUseCase(
     private val telegramRepository: TelegramRepository,
-    private val aiRepository: AiRepository
+    private val aiRepository: AiRepository,
+    private val historyCompressor: HistoryCompressor
 ) {
     /**
      * Обрабатывает входящее сообщение.
@@ -58,7 +63,13 @@ class HandleMessageUseCase(
      * Обрабатывает сообщение в режиме AI-консультации.
      * Отправляет запрос к AI-модели и возвращает ответ пользователю.
      * Применяет system prompt в зависимости от выбранного сценария.
-     * Для сценария CONSULTANT используется история сообщений, для остальных - одиночные запросы.
+     * Для сценариев CONSULTANT и COMPRESSION используется история сообщений,
+     * для остальных - одиночные запросы.
+     *
+     * Для COMPRESSION применяется гибридный метод подсчёта токенов:
+     * - Используются точные promptTokens из предыдущего ответа API
+     * - Оценивается только новое сообщение пользователя
+     * - При превышении лимита (~7372 токена для YandexGPT Lite) выполняется компрессия
      *
      * @param chatId ID чата
      * @param userText Текст сообщения от пользователя
@@ -68,19 +79,52 @@ class HandleMessageUseCase(
     private suspend fun handleAiMessage(
         chatId: Long,
         userText: String,
-        model: com.example.tgbot.domain.model.ai.AiModel,
+        model: AiModel,
         scenario: Scenario
     ) {
         try {
             val session = SessionManager.getSession(chatId)
             val isConsultantMode = scenario == Scenario.CONSULTANT
+            val isCompressionMode = scenario == Scenario.COMPRESSION
 
             // Создаем сообщение пользователя
             val userMessage = AiMessage(role = MessageRole.USER, content = userText)
 
+            // Проверка на необходимость компрессии (ДО добавления в историю)
+            if (isCompressionMode && model == AiModel.YANDEX_GPT_LITE) {
+                println("CHECK COMPRESSION")
+                val historyTokens = session.lastPromptTokens
+                val newMessageTokens = TokenCounter.estimateTokens(userText)
+
+                val historySize = session.conversationHistory.size
+                println("HISTORY SIZE: $historySize")
+
+//                if (TokenCounter.shouldCompress(historyTokens, newMessageTokens)) {
+                if (historySize >= 10) {
+                    println("SHOULD COMPRESSION")
+                    // Выполняем компрессию истории
+                    val summary = historyCompressor.compressHistory(
+                        history = session.conversationHistory,
+                        model = model,
+                        temperature = session.temperature,
+                        huggingFaceModel = session.selectedHuggingFaceModel
+                    )
+
+                    // Заменяем историю на summary
+                    SessionManager.replaceHistory(chatId, listOf(summary))
+                    SessionManager.incrementCompressionCount(chatId)
+
+                    // Уведомляем пользователя о компрессии
+                    telegramRepository.sendMessage(
+                        chatId,
+                        "🗜️ История сжата (было ~$historyTokens токенов, превышен лимит ${TokenCounter.TOKEN_LIMIT})"
+                    )
+                }
+            }
+
             // Определяем: сохранять ли в историю
-            val conversationHistory: MutableList<AiMessage> = if (isConsultantMode) {
-                // CONSULTANT: добавляем в историю и используем её
+            val conversationHistory: MutableList<AiMessage> = if (isConsultantMode || isCompressionMode) {
+                // CONSULTANT или COMPRESSION: добавляем в историю и используем её
                 SessionManager.addMessage(chatId, userMessage)
                 session.conversationHistory.toMutableList()
             } else {
@@ -91,8 +135,8 @@ class HandleMessageUseCase(
             // Добавляем system prompt в зависимости от сценария (если нужно)
             val systemPrompt = getSystemPromptForScenario(scenario)
             if (systemPrompt != null) {
-                if (isConsultantMode) {
-                    // Для CONSULTANT: обновляем/добавляем в начало истории
+                if (isConsultantMode || isCompressionMode) {
+                    // Для CONSULTANT и COMPRESSION: обновляем/добавляем в начало истории
                     val firstSystemIndex = conversationHistory.indexOfFirst { it.role == MessageRole.SYSTEM }
                     if (firstSystemIndex != -1) {
                         // Заменяем существующий system prompt
@@ -131,8 +175,15 @@ class HandleMessageUseCase(
             // Отправляем запрос к AI
             val aiResponse = aiRepository.sendMessage(aiRequest)
 
-            // Добавляем ответ AI в историю только для CONSULTANT
-            if (isConsultantMode) {
+            // Сохраняем точное значение promptTokens для гибридного метода (COMPRESSION)
+            if (isCompressionMode) {
+                aiResponse.tokenUsage?.let { usage ->
+                    SessionManager.updatePromptTokens(chatId, usage.promptTokens)
+                }
+            }
+
+            // Добавляем ответ AI в историю для CONSULTANT и COMPRESSION
+            if (isConsultantMode || isCompressionMode) {
                 SessionManager.addMessage(
                     chatId,
                     AiMessage(role = MessageRole.ASSISTANT, content = aiResponse.content)
@@ -160,9 +211,18 @@ class HandleMessageUseCase(
                     append("\uD83D\uDD22 Токены: n/a\n")
                 }
 
+                // Для COMPRESSION показываем статистику истории
+                if (isCompressionMode) {
+                    val updatedSession = SessionManager.getSession(chatId)
+                    append("\uD83D\uDCCA Статистика истории:\n")
+                    append("  - Токенов в истории: ~${updatedSession.lastPromptTokens} / ${TokenCounter.TOKEN_LIMIT}\n")
+                    append("  - Использование контекста: ${TokenCounter.calculateUsagePercent(updatedSession.lastPromptTokens)}%\n")
+                    append("  - Сжатий выполнено: ${updatedSession.compressionCount}\n\n")
+                }
+
                 append("\n")
                 // Для HuggingFace показываем конкретную модель
-                val modelName = if (model == com.example.tgbot.domain.model.ai.AiModel.HUGGING_FACE) {
+                val modelName = if (model == AiModel.HUGGING_FACE) {
                     session.selectedHuggingFaceModel?.displayName ?: model.displayName
                 } else {
                     model.displayName
@@ -187,7 +247,7 @@ class HandleMessageUseCase(
      * Возвращает system prompt для указанного сценария.
      *
      * @param scenario Сценарий взаимодействия
-     * @return System prompt или null для FREE_CHAT
+     * @return System prompt или null для FREE_CHAT и EXPERTS
      */
     private fun getSystemPromptForScenario(scenario: Scenario): String? {
         return when (scenario) {
@@ -195,6 +255,7 @@ class HandleMessageUseCase(
             Scenario.JSON_FORMAT -> SystemPrompts.JSON_FORMAT
             Scenario.CONSULTANT -> SystemPrompts.CONSULTANT
             Scenario.STEP_BY_STEP -> SystemPrompts.STEP_BY_STEP
+            Scenario.COMPRESSION -> SystemPrompts.COMPRESSION
             Scenario.EXPERTS -> null // Этот сценарий обрабатывается отдельно
         }
     }

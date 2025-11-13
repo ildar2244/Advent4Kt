@@ -25,7 +25,7 @@ fun AiRequest.toYandexGptDto(folderId: String): YandexGptCompletionRequest {
         completionOptions = YandexGptCompletionOptionsDto(
             stream = false,
             temperature = temperature,
-            maxTokens = maxTokens?.toString()
+            maxTokens = "4000" //maxTokens?.toString()
         ),
         messages = messages.map { it.toYandexGptDto() }
     )

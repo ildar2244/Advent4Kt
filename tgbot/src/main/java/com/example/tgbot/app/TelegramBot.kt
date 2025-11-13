@@ -8,6 +8,7 @@ import com.example.tgbot.data.remote.ai.OpenAiApiClient
 import com.example.tgbot.data.remote.ai.YandexGptApiClient
 import com.example.tgbot.data.repository.AiRepositoryImpl
 import com.example.tgbot.data.repository.TelegramRepositoryImpl
+import com.example.tgbot.domain.service.HistoryCompressor
 import com.example.tgbot.domain.usecase.HandleCallbackUseCase
 import com.example.tgbot.domain.usecase.HandleCommandUseCase
 import com.example.tgbot.domain.usecase.HandleMessageUseCase
@@ -76,8 +77,11 @@ class TelegramBot(private val token: String) {
         huggingFaceClient
     )
 
+    // Инициализация сервисов для работы с историей диалога
+    private val historyCompressor = HistoryCompressor(aiRepository)
+
     // Инициализация use cases
-    private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository)
+    private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor)
     private val handleCommandUseCase = HandleCommandUseCase(telegramRepository)
     private val handleCallbackUseCase = HandleCallbackUseCase(telegramRepository)
 
