@@ -10,6 +10,7 @@ import com.example.tgbot.domain.model.ai.AiModel
 import com.example.tgbot.domain.model.ai.AiRequest
 import com.example.tgbot.domain.model.ai.MessageRole
 import com.example.tgbot.domain.repository.AiRepository
+import com.example.tgbot.domain.repository.SummaryRepository
 import com.example.tgbot.domain.repository.TelegramRepository
 import com.example.tgbot.domain.service.HistoryCompressor
 import com.example.tgbot.domain.util.TokenCounter
@@ -34,7 +35,8 @@ import kotlinx.coroutines.coroutineScope
 class HandleMessageUseCase(
     private val telegramRepository: TelegramRepository,
     private val aiRepository: AiRepository,
-    private val historyCompressor: HistoryCompressor
+    private val historyCompressor: HistoryCompressor,
+    private val summaryRepository: SummaryRepository
 ) {
     /**
      * Обрабатывает входящее сообщение.
@@ -100,7 +102,7 @@ class HandleMessageUseCase(
                 println("HISTORY SIZE: $historySize")
 
 //                if (TokenCounter.shouldCompress(historyTokens, newMessageTokens)) {
-                if (historySize >= 10) {
+                if (historySize >= 6) {
                     println("SHOULD COMPRESSION")
                     // Выполняем компрессию истории
                     val summary = historyCompressor.compressHistory(
@@ -109,6 +111,14 @@ class HandleMessageUseCase(
                         temperature = session.temperature,
                         huggingFaceModel = session.selectedHuggingFaceModel
                     )
+
+                    // Сохраняем результат суммаризации в БД
+                    try {
+                        val summaryId = summaryRepository.saveSummary(summary.content)
+                        println("✓ Суммаризация сохранена в БД (ID: $summaryId)")
+                    } catch (e: Exception) {
+                        println("⚠️ Ошибка сохранения суммаризации в БД: ${e.message}")
+                    }
 
                     // Заменяем историю на summary
                     SessionManager.replaceHistory(chatId, listOf(summary))

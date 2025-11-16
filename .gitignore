@@ -13,3 +13,4 @@ local.properties
 /CLAUDE.md
 /token_usage.log
 /token_journal/
+*.db

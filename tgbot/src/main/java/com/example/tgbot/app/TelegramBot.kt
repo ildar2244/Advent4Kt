@@ -1,12 +1,14 @@
 package com.example.tgbot.app
 
 import com.example.tgbot.BuildConfig
+import com.example.tgbot.data.local.db.DatabaseFactory
 import com.example.tgbot.data.remote.TelegramApi
 import com.example.tgbot.data.remote.ai.ClaudeApiClient
 import com.example.tgbot.data.remote.ai.HuggingFaceApiClient
 import com.example.tgbot.data.remote.ai.OpenAiApiClient
 import com.example.tgbot.data.remote.ai.YandexGptApiClient
 import com.example.tgbot.data.repository.AiRepositoryImpl
+import com.example.tgbot.data.repository.SummaryRepositoryImpl
 import com.example.tgbot.data.repository.TelegramRepositoryImpl
 import com.example.tgbot.domain.service.HistoryCompressor
 import com.example.tgbot.domain.usecase.HandleCallbackUseCase
@@ -28,6 +30,18 @@ import kotlinx.serialization.json.Json
 class TelegramBot(private val token: String) {
     // Настройка HTTP-клиента Ktor
     private val httpClient = HttpClient(CIO) {
+        // Настройка CIO engine для лучшей надежности
+        engine {
+            maxConnectionsCount = 1000
+            endpoint {
+                maxConnectionsPerRoute = 100
+                pipelineMaxSize = 20
+                keepAliveTime = 5000
+                connectTimeout = 40000
+                connectAttempts = 3
+            }
+        }
+
         // Content Negotiation для автоматической сериализации/десериализации JSON
         install(ContentNegotiation) {
             json(Json {
@@ -35,6 +49,7 @@ class TelegramBot(private val token: String) {
                 isLenient = true // Более мягкий парсинг JSON
             })
         }
+
         // Логирование HTTP-запросов
         install(Logging) {
             logger = object : Logger {
@@ -46,11 +61,25 @@ class TelegramBot(private val token: String) {
             }
             level = LogLevel.INFO
         }
+
         // Настройка таймаутов для long polling
         install(HttpTimeout) {
             requestTimeoutMillis = 40000  // 30 сек long polling + 10 сек запас
             connectTimeoutMillis = 40000  // Таймаут подключения (должен быть > long polling timeout)
             socketTimeoutMillis = 40000   // Таймаут сокета
+        }
+
+        // Retry механизм для сетевых ошибок
+        install(HttpRequestRetry) {
+            retryOnServerErrors(maxRetries = 3)
+            exponentialDelay()
+            retryIf { request, response ->
+                response.status.value.let { it == 429 || it >= 500 }
+            }
+            retryOnException(maxRetries = 3, retryOnTimeout = true)
+            delayMillis { retry ->
+                (retry * 1000L).coerceAtMost(5000L)
+            }
         }
     }
 
@@ -80,9 +109,12 @@ class TelegramBot(private val token: String) {
     // Инициализация сервисов для работы с историей диалога
     private val historyCompressor = HistoryCompressor(aiRepository)
 
+    // Инициализация репозитория для работы с БД
+    private val summaryRepository = SummaryRepositoryImpl()
+
     // Инициализация use cases
-    private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor)
-    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository)
+    private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor, summaryRepository)
+    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository)
     private val handleCallbackUseCase = HandleCallbackUseCase(telegramRepository)
 
     // Offset для отслеживания обработанных обновлений
@@ -172,6 +204,9 @@ fun main() = runBlocking {
     if (yandexCloudFolderId.isEmpty()) {
         println("Предупреждение: YANDEX_CLOUD_FOLDER_ID не задан в local.properties")
     }
+
+    // Инициализация базы данных
+    DatabaseFactory.init()
 
     val bot = TelegramBot(telegramToken)
 

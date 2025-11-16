@@ -53,4 +53,13 @@ dependencies {
 
     // Logging
     implementation(libs.slf4j.simple)
+
+    // Exposed ORM
+    implementation(libs.exposed.core)
+    implementation(libs.exposed.dao)
+    implementation(libs.exposed.jdbc)
+    implementation(libs.exposed.java.time)
+
+    // SQLite JDBC
+    implementation(libs.sqlite.jdbc)
 }
