@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 rootProject.name = "Advent4Kt"
 include(":app")
 include(":tgbot")
+include(":mcpweather")

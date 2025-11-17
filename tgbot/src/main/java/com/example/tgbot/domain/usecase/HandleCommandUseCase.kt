@@ -6,6 +6,7 @@ import com.example.tgbot.domain.model.Message
 import com.example.tgbot.domain.model.Scenario
 import com.example.tgbot.domain.model.SessionManager
 import com.example.tgbot.domain.model.ai.AiModel
+import com.example.tgbot.domain.repository.McpRepository
 import com.example.tgbot.domain.repository.SummaryRepository
 import com.example.tgbot.domain.repository.TelegramRepository
 import java.time.ZoneId
@@ -25,13 +26,17 @@ import java.time.format.DateTimeFormatter
  * - /db_stats - Статистика базы данных суммаризаций
  * - /db_history - Последние 3 записи из БД
  * - /db_clear - Очистка всех записей из БД
+ * - /mcp - MCP команды (Weather Tools, Weather Location)
+ * - /weather_tools - Список доступных MCP инструментов
+ * - /weather_location - Запрос геолокации для прогноза погоды
  *
  * Команды сценариев обрабатываются динамически через Scenario.findByCommand(),
  * что позволяет легко добавлять новые сценарии без изменения логики обработки.
  */
 class HandleCommandUseCase(
     private val repository: TelegramRepository,
-    private val summaryRepository: SummaryRepository
+    private val summaryRepository: SummaryRepository,
+    private val mcpRepository: McpRepository
 ) {
     /**
      * Обрабатывает команду из сообщения и вызывает соответствующий обработчик.
@@ -51,6 +56,9 @@ class HandleCommandUseCase(
             command == "/db_stats" -> handleDbStatsCommand(message.chatId)
             command == "/db_history" -> handleDbHistoryCommand(message.chatId)
             command == "/db_clear" -> handleDbClearCommand(message.chatId)
+            command == "/mcp" -> handleMcpCommand(message.chatId)
+            command == "/weather_tools" -> handleWeatherToolsCommand(message.chatId)
+            command == "/weather_location" -> handleWeatherLocationCommand(message.chatId)
             else -> {
                 // Проверяем, является ли команда командой сценария
                 val scenario = Scenario.findByCommand(command)
@@ -360,5 +368,72 @@ class HandleCommandUseCase(
                 text = "❌ Ошибка при очистке БД:\n${e.message}"
             )
         }
+    }
+
+    /**
+     * Обрабатывает команду /mcp.
+     * Отправляет сообщение с инлайн-кнопками для MCP команд.
+     *
+     * @param chatId ID чата, в который нужно отправить сообщение
+     */
+    private suspend fun handleMcpCommand(chatId: Long) {
+        val keyboard = InlineKeyboard(
+            rows = listOf(
+                listOf(
+                    InlineKeyboardButton(
+                        text = "Weather Tools",
+                        callbackData = "mcp_weather_tools"
+                    ),
+                    InlineKeyboardButton(
+                        text = "Weather Location",
+                        callbackData = "mcp_weather_location"
+                    )
+                )
+            )
+        )
+
+        repository.sendMessageWithKeyboard(
+            chatId = chatId,
+            text = "MCP Weather Server Commands:",
+            keyboard = keyboard
+        )
+    }
+
+    /**
+     * Обрабатывает команду /weather_tools.
+     * Отправляет список доступных MCP инструментов.
+     *
+     * @param chatId ID чата, в который нужно отправить сообщение
+     */
+    private suspend fun handleWeatherToolsCommand(chatId: Long) {
+        val tools = mcpRepository.getAvailableTools()
+
+        val responseText = buildString {
+            appendLine("Available MCP Tools:")
+            appendLine()
+            tools.forEach { (name, description) ->
+                appendLine("🔧 $name")
+                appendLine("   $description")
+                appendLine()
+            }
+        }.trim()
+
+        repository.sendMessage(
+            chatId = chatId,
+            text = responseText
+        )
+    }
+
+    /**
+     * Обрабатывает команду /weather_location.
+     * Запрашивает у пользователя отправку геолокации для получения прогноза погоды.
+     *
+     * @param chatId ID чата, в который нужно отправить сообщение
+     */
+    private suspend fun handleWeatherLocationCommand(chatId: Long) {
+        repository.sendMessage(
+            chatId = chatId,
+            text = "📍 Please send your location to get weather forecast.\n\nUse the 📎 (attach) button and select Location."
+        )
     }
 }

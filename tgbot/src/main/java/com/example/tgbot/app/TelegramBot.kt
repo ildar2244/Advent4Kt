@@ -7,7 +7,12 @@ import com.example.tgbot.data.remote.ai.ClaudeApiClient
 import com.example.tgbot.data.remote.ai.HuggingFaceApiClient
 import com.example.tgbot.data.remote.ai.OpenAiApiClient
 import com.example.tgbot.data.remote.ai.YandexGptApiClient
+import com.example.mcpweather.data.remote.WeatherGovApi
+import com.example.mcpweather.data.repository.WeatherRepositoryImpl
+import com.example.mcpweather.domain.usecase.GetAlertsUseCase
+import com.example.mcpweather.domain.usecase.GetForecastUseCase
 import com.example.tgbot.data.repository.AiRepositoryImpl
+import com.example.tgbot.data.repository.McpRepositoryImpl
 import com.example.tgbot.data.repository.SummaryRepositoryImpl
 import com.example.tgbot.data.repository.TelegramRepositoryImpl
 import com.example.tgbot.domain.service.HistoryCompressor
@@ -112,10 +117,17 @@ class TelegramBot(private val token: String) {
     // Инициализация репозитория для работы с БД
     private val summaryRepository = SummaryRepositoryImpl()
 
+    // Инициализация MCP Weather
+    private val weatherGovApi = WeatherGovApi(httpClient)
+    private val weatherRepository = WeatherRepositoryImpl(weatherGovApi)
+    private val getForecastUseCase = GetForecastUseCase(weatherRepository)
+    private val getAlertsUseCase = GetAlertsUseCase(weatherRepository)
+    private val mcpRepository = McpRepositoryImpl(getForecastUseCase, getAlertsUseCase)
+
     // Инициализация use cases
-    private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor, summaryRepository)
-    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository)
-    private val handleCallbackUseCase = HandleCallbackUseCase(telegramRepository)
+    private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor, summaryRepository, mcpRepository)
+    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository, mcpRepository)
+    private val handleCallbackUseCase = HandleCallbackUseCase(telegramRepository, mcpRepository)
 
     // Offset для отслеживания обработанных обновлений
     private var offset: Long? = null
@@ -140,8 +152,16 @@ class TelegramBot(private val token: String) {
                         handleCallbackUseCase(callback)
                     }
 
-                    // Обработка текстовых сообщений
+                    // Обработка сообщений (текстовых и location)
                     update.message?.let { message ->
+                        // Если это location message
+                        if (message.location != null) {
+                            println("📍 Получена геолокация от ${message.from.firstName}")
+                            handleMessageUseCase(message)
+                            return@let
+                        }
+
+                        // Обработка текстовых сообщений
                         val text = message.text ?: return@let
 //                        println("Получено сообщение от ${message.from.firstName}: $text")
 

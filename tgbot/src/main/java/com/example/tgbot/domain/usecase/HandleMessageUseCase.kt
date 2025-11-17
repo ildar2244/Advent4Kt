@@ -10,19 +10,22 @@ import com.example.tgbot.domain.model.ai.AiModel
 import com.example.tgbot.domain.model.ai.AiRequest
 import com.example.tgbot.domain.model.ai.MessageRole
 import com.example.tgbot.domain.repository.AiRepository
+import com.example.tgbot.domain.repository.McpRepository
 import com.example.tgbot.domain.repository.SummaryRepository
 import com.example.tgbot.domain.repository.TelegramRepository
 import com.example.tgbot.domain.service.HistoryCompressor
 import com.example.tgbot.domain.util.TokenCounter
+import com.example.tgbot.domain.util.WeatherFormatter
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 
 /**
- * Use case для обработки обычных текстовых сообщений (не команд).
+ * Use case для обработки обычных текстовых сообщений (не команд) и location messages.
  *
  * Режимы работы:
  * - Если AI-модель не выбрана: работает в эхо-режиме (возвращает текст пользователя)
  * - Если модель выбрана: отправляет запрос к AI с учетом текущего сценария
+ * - Если получена геолокация: получает прогноз погоды через MCP Weather Server
  *
  * Поддержка сценариев:
  * - FREE_CHAT: одиночный запрос без истории и дополнительных промптов
@@ -36,15 +39,27 @@ class HandleMessageUseCase(
     private val telegramRepository: TelegramRepository,
     private val aiRepository: AiRepository,
     private val historyCompressor: HistoryCompressor,
-    private val summaryRepository: SummaryRepository
+    private val summaryRepository: SummaryRepository,
+    private val mcpRepository: McpRepository
 ) {
     /**
      * Обрабатывает входящее сообщение.
      * Проверяет наличие активной AI-сессии и направляет обработку соответствующим образом.
+     * Обрабатывает location messages для получения прогноза погоды.
      *
      * @param message Входящее сообщение от пользователя
      */
     suspend operator fun invoke(message: Message) {
+        println("📨 HandleMessageUseCase: message.location = ${message.location}")
+        println("📨 HandleMessageUseCase: message.text = ${message.text}")
+
+        // Проверяем, есть ли геолокация
+        if (message.location != null) {
+            println("🗺 Location message detected, handling...")
+            handleLocationMessage(message.chatId, message.location!!)
+            return
+        }
+
         val userText = message.text ?: return
         val session = SessionManager.getSession(message.chatId)
 
@@ -58,6 +73,36 @@ class HandleMessageUseCase(
         when (session.currentScenario) {
             Scenario.EXPERTS -> handleExpertsScenario(message.chatId, userText, session.selectedModel!!)
             else -> handleAiMessage(message.chatId, userText, session.selectedModel!!, session.currentScenario)
+        }
+    }
+
+    /**
+     * Обрабатывает location message.
+     * Получает прогноз погоды через MCP Repository и отправляет пользователю.
+     *
+     * @param chatId ID чата пользователя
+     * @param location Геолокация пользователя
+     */
+    private suspend fun handleLocationMessage(chatId: Long, location: com.example.tgbot.domain.model.Location) {
+        try {
+            println("📍 Location received: lat=${location.latitude}, lon=${location.longitude}")
+            telegramRepository.sendMessage(chatId, "Fetching weather forecast...")
+
+            println("🌤 Calling weather API...")
+            val forecasts = mcpRepository.getForecast(location.latitude, location.longitude)
+            println("✅ Got ${forecasts.size} forecast periods")
+
+            val formattedForecast = WeatherFormatter.formatBrief(forecasts)
+            println("📤 Sending formatted forecast to user")
+
+            telegramRepository.sendMessage(chatId, formattedForecast)
+        } catch (e: Exception) {
+            println("❌ Error getting weather forecast: ${e.message}")
+            e.printStackTrace()
+            telegramRepository.sendMessage(
+                chatId,
+                "Error getting weather forecast: ${e.message}\n\nStack trace: ${e.stackTraceToString().take(500)}"
+            )
         }
     }
 

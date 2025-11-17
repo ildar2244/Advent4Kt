@@ -9,13 +9,15 @@ data class MessageDto(
     @SerialName("message_id") val messageId: Long,
     @SerialName("from") val from: UserDto,
     @SerialName("chat") val chat: ChatDto,
-    @SerialName("text") val text: String? = null
+    @SerialName("text") val text: String? = null,
+    @SerialName("location") val location: LocationDto? = null
 ) {
     fun toDomain(): Message = Message(
         messageId = messageId,
         chatId = chat.id,
         from = from.toDomain(),
-        text = text
+        text = text,
+        location = location?.toDomain()
     )
 }
 

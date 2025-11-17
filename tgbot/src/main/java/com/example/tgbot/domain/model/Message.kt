@@ -7,10 +7,12 @@ package com.example.tgbot.domain.model
  * @property chatId Идентификатор чата, в котором было отправлено сообщение
  * @property from Пользователь, отправивший сообщение
  * @property text Текст сообщения (если есть)
+ * @property location Геолокация (если есть)
  */
 data class Message(
     val messageId: Long,
     val chatId: Long,
     val from: User,
-    val text: String?
+    val text: String?,
+    val location: Location? = null
 )

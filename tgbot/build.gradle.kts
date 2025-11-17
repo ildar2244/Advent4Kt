@@ -38,6 +38,9 @@ buildConfig {
 }
 
 dependencies {
+    // MCP Weather module
+    implementation(project(":mcpweather"))
+
     // Ktor
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.cio)

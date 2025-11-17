@@ -8,6 +8,7 @@ import com.example.tgbot.domain.model.SessionManager
 import com.example.tgbot.domain.model.ai.AiMessage
 import com.example.tgbot.domain.model.ai.AiModel
 import com.example.tgbot.domain.model.ai.MessageRole
+import com.example.tgbot.domain.repository.McpRepository
 import com.example.tgbot.domain.repository.TelegramRepository
 
 /**
@@ -20,6 +21,8 @@ import com.example.tgbot.domain.repository.TelegramRepository
  * - "hf_model:*" - Выбор конкретной модели HuggingFace
  * - "scenario_*" - Выбор сценария взаимодействия (динамически из Scenario enum)
  * - "set_temp:*" - Установка значения temperature
+ * - "mcp_weather_tools" - Показать список доступных MCP инструментов
+ * - "mcp_weather_location" - Запросить геолокацию для прогноза погоды
  *
  * При выборе модели:
  * - Сохраняется выбранная модель в сессию пользователя
@@ -31,7 +34,8 @@ import com.example.tgbot.domain.repository.TelegramRepository
  * - Отправляется подтверждение активации сценария
  */
 class HandleCallbackUseCase(
-    private val repository: TelegramRepository
+    private val repository: TelegramRepository,
+    private val mcpRepository: McpRepository
 ) {
     /**
      * Обрабатывает нажатие пользователем на инлайн-кнопку.
@@ -43,6 +47,17 @@ class HandleCallbackUseCase(
     suspend operator fun invoke(callback: CallbackQuery) {
         val data = callback.data ?: return
         val message = callback.message ?: return
+
+        // Проверяем, является ли callback MCP команд ой
+        if (data == "mcp_weather_tools") {
+            handleMcpWeatherToolsCallback(callback, message.chatId)
+            return
+        }
+
+        if (data == "mcp_weather_location") {
+            handleMcpWeatherLocationCallback(callback, message.chatId)
+            return
+        }
 
         // Проверяем, является ли callback нажатием на кнопку "Модели"
         if (data == "show_models") {
@@ -344,6 +359,58 @@ class HandleCallbackUseCase(
                     "Используйте /hf_models для смены модели HuggingFace.\n" +
                     "Используйте /temperature для изменения параметра генерации.\n" +
                     "Используйте /stop для выхода из режима AI-консультации."
+        )
+
+        // Отвечаем на callback (убирает "часики" на кнопке в Telegram)
+        repository.answerCallbackQuery(callback.id)
+    }
+
+    /**
+     * Обрабатывает callback "mcp_weather_tools".
+     * Показывает список доступных MCP инструментов.
+     *
+     * @param callback Callback-запрос
+     * @param chatId ID чата
+     */
+    private suspend fun handleMcpWeatherToolsCallback(
+        callback: CallbackQuery,
+        chatId: Long
+    ) {
+        val tools = mcpRepository.getAvailableTools()
+
+        val responseText = buildString {
+            appendLine("Available MCP Tools:")
+            appendLine()
+            tools.forEach { (name, description) ->
+                appendLine("🔧 $name")
+                appendLine("   $description")
+                appendLine()
+            }
+        }.trim()
+
+        repository.sendMessage(
+            chatId = chatId,
+            text = responseText
+        )
+
+        // Отвечаем на callback (убирает "часики" на кнопке в Telegram)
+        repository.answerCallbackQuery(callback.id)
+    }
+
+    /**
+     * Обрабатывает callback "mcp_weather_location".
+     * Запрашивает у пользователя отправку геолокации.
+     *
+     * @param callback Callback-запрос
+     * @param chatId ID чата
+     */
+    private suspend fun handleMcpWeatherLocationCallback(
+        callback: CallbackQuery,
+        chatId: Long
+    ) {
+        repository.sendMessage(
+            chatId = chatId,
+            text = "📍 Please send your location to get weather forecast.\n\nUse the 📎 (attach) button and select Location."
         )
 
         // Отвечаем на callback (убирает "часики" на кнопке в Telegram)
