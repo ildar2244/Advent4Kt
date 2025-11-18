@@ -1,40 +1,94 @@
 package com.example.mcpweather.app
 
+import com.example.mcpweather.BuildConfig
 import com.example.mcpweather.data.remote.WeatherGovApi
 import com.example.mcpweather.data.repository.WeatherRepositoryImpl
 import com.example.mcpweather.domain.usecase.GetAlertsUseCase
 import com.example.mcpweather.domain.usecase.GetForecastUseCase
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation as ClientContentNegotiation
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
 import io.ktor.serialization.kotlinx.json.json
-import io.modelcontextprotocol.kotlin.sdk.CallToolResult
-import io.modelcontextprotocol.kotlin.sdk.Implementation
-import io.modelcontextprotocol.kotlin.sdk.ServerCapabilities
-import io.modelcontextprotocol.kotlin.sdk.TextContent
-import io.modelcontextprotocol.kotlin.sdk.Tool
-import io.modelcontextprotocol.kotlin.sdk.server.Server
-import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
-import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
-import kotlinx.io.Sink
-import kotlinx.io.Source
+import io.ktor.server.application.*
+import io.ktor.server.cio.CIO as ServerCIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.routing.*
+import io.ktor.server.websocket.*
+import io.ktor.websocket.*
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.time.Duration.Companion.seconds
 
-suspend fun main() {
-    // Initialize HTTP client
+// JSON-RPC DTOs
+@Serializable
+data class JsonRpcRequest(
+    val jsonrpc: String = "2.0",
+    val method: String,
+    val params: JsonObject? = null,
+    val id: JsonElement
+)
+
+@Serializable
+data class JsonRpcResponse(
+    val jsonrpc: String = "2.0",
+    val result: JsonElement? = null,
+    val error: JsonRpcError? = null,
+    val id: JsonElement
+)
+
+@Serializable
+data class JsonRpcError(
+    val code: Int,
+    val message: String,
+    val data: JsonElement? = null
+)
+
+@Serializable
+data class ToolCallParams(
+    val name: String,
+    val arguments: JsonObject
+)
+
+@Serializable
+data class ToolCallResult(
+    val content: List<ContentItem>
+)
+
+@Serializable
+data class ContentItem(
+    val type: String = "text",
+    val text: String
+)
+
+@Serializable
+data class PingMessage(
+    val type: String = "ping"
+)
+
+@Serializable
+data class PongMessage(
+    val type: String = "pong"
+)
+
+fun main() {
+    val json = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = false
+    }
+
+    // Initialize HTTP client for weather.gov API
     val httpClient = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            json(Json {
-                ignoreUnknownKeys = true
-                prettyPrint = true
-            })
+        install(ClientContentNegotiation) {
+            json(json)
         }
         install(Logging) {
             level = LogLevel.INFO
@@ -49,151 +103,196 @@ suspend fun main() {
     val getForecastUseCase = GetForecastUseCase(weatherRepository)
     val getAlertsUseCase = GetAlertsUseCase(weatherRepository)
 
-    // Create MCP server
-    val server = Server(
-        serverInfo = Implementation(
-            name = "advent4kt-weather",
-            version = "1.0.0"
-        ),
-        options = ServerOptions(
-            capabilities = ServerCapabilities(
-                tools = ServerCapabilities.Tools(listChanged = true)
-            )
-        )
-    )
+    val host = BuildConfig.MCP_WEATHER_WS_HOST
+    val port = BuildConfig.MCP_WEATHER_WS_PORT
 
-    // Register Weather Forecast Tool
-    server.addTool(
-        name = "get_forecast",
-        description = "Get weather forecast for a location by latitude and longitude using weather.gov API",
-        inputSchema = Tool.Input(
-            properties = JsonObject(
-                mapOf(
-                    "latitude" to JsonObject(
-                        mapOf(
-                            "type" to JsonPrimitive("number"),
-                            "description" to JsonPrimitive("Latitude coordinate (e.g., 40.7484)")
-                        )
-                    ),
-                    "longitude" to JsonObject(
-                        mapOf(
-                            "type" to JsonPrimitive("number"),
-                            "description" to JsonPrimitive("Longitude coordinate (e.g., -73.9856)")
-                        )
-                    )
-                )
-            ),
-            required = listOf("latitude", "longitude")
-        )
-    ) { request ->
-        try {
-            val latitude = request.arguments["latitude"]?.jsonPrimitive?.doubleOrNull
-                ?: throw IllegalArgumentException("Missing or invalid latitude")
-            val longitude = request.arguments["longitude"]?.jsonPrimitive?.doubleOrNull
-                ?: throw IllegalArgumentException("Missing or invalid longitude")
+    println("Starting MCP Weather WebSocket Server on ws://$host:$port/mcp")
 
-            val forecasts = getForecastUseCase(latitude, longitude)
-
-            val responseText = buildString {
-                appendLine("Weather Forecast for ($latitude, $longitude):")
-                appendLine()
-                forecasts.take(7).forEach { forecast ->
-                    appendLine("=== ${forecast.name} ===")
-                    appendLine("Temperature: ${forecast.temperature}°${forecast.temperatureUnit}")
-                    appendLine("Wind: ${forecast.windSpeed} ${forecast.windDirection}")
-                    appendLine("Conditions: ${forecast.shortForecast}")
-                    appendLine("Details: ${forecast.detailedForecast}")
-                    appendLine()
-                }
-            }
-
-            CallToolResult(
-                content = listOf(
-                    TextContent(
-                        text = responseText
-                    )
-                ),
-                isError = false
-            )
-        } catch (e: Exception) {
-            CallToolResult(
-                content = listOf(
-                    TextContent(
-                        text = "Error getting forecast: ${e.message}"
-                    )
-                ),
-                isError = true
-            )
+    // Start WebSocket server
+    embeddedServer(ServerCIO, port = port, host = host) {
+        install(WebSockets) {
+            pingPeriod = 30.seconds
+            timeout = 15.seconds
+            maxFrameSize = Long.MAX_VALUE
+            masking = false
         }
-    }
 
-    // Register Weather Alerts Tool
-    server.addTool(
-        name = "get_alerts",
-        description = "Get active weather alerts for a US state using weather.gov API",
-        inputSchema = Tool.Input(
-            properties = JsonObject(
-                mapOf(
-                    "state" to JsonObject(
-                        mapOf(
-                            "type" to JsonPrimitive("string"),
-                            "description" to JsonPrimitive("Two-letter US state code (e.g., 'CA', 'TX', 'NY')")
-                        )
-                    )
-                )
-            ),
-            required = listOf("state")
-        )
-    ) { request ->
-        try {
-            val state = request.arguments["state"]?.jsonPrimitive?.contentOrNull
-                ?: throw IllegalArgumentException("Missing state parameter")
+        routing {
+            webSocket("/mcp") {
+                println("Client connected: ${call.request.local.remoteHost}")
 
-            val alerts = getAlertsUseCase(state)
+                try {
+                    for (frame in incoming) {
+                        when (frame) {
+                            is Frame.Text -> {
+                                val text = frame.readText()
 
-            val responseText = if (alerts.isEmpty()) {
-                "No active weather alerts for $state"
-            } else {
-                buildString {
-                    appendLine("Active Weather Alerts for $state:")
-                    appendLine()
-                    alerts.forEach { alert ->
-                        appendLine("=== ${alert.event} ===")
-                        appendLine("Severity: ${alert.severity}")
-                        appendLine("Urgency: ${alert.urgency}")
-                        appendLine("Area: ${alert.areaDesc}")
-                        appendLine("Headline: ${alert.headline}")
-                        appendLine("Description: ${alert.description}")
-                        appendLine()
+                                // Handle ping/pong
+                                if (text.contains("\"type\"") && text.contains("\"ping\"")) {
+                                    val pong = json.encodeToString(PongMessage.serializer(), PongMessage())
+                                    send(Frame.Text(pong))
+                                    continue
+                                }
+
+                                try {
+                                    val request = json.decodeFromString<JsonRpcRequest>(text)
+                                    val response = handleJsonRpcRequest(
+                                        request,
+                                        getForecastUseCase,
+                                        getAlertsUseCase,
+                                        json
+                                    )
+                                    val responseJson = json.encodeToString(JsonRpcResponse.serializer(), response)
+                                    send(Frame.Text(responseJson))
+                                } catch (e: Exception) {
+                                    println("Error processing request: ${e.message}")
+                                    e.printStackTrace()
+                                    val errorResponse = JsonRpcResponse(
+                                        error = JsonRpcError(
+                                            code = -32700,
+                                            message = "Parse error: ${e.message}"
+                                        ),
+                                        id = JsonPrimitive(-1)
+                                    )
+                                    val errorJson = json.encodeToString(JsonRpcResponse.serializer(), errorResponse)
+                                    send(Frame.Text(errorJson))
+                                }
+                            }
+                            else -> {}
+                        }
                     }
+                } catch (e: Exception) {
+                    println("WebSocket error: ${e.message}")
+                } finally {
+                    println("Client disconnected")
                 }
             }
-
-            CallToolResult(
-                content = listOf(
-                    TextContent(
-                        text = responseText
-                    )
-                ),
-                isError = false
-            )
-        } catch (e: Exception) {
-            CallToolResult(
-                content = listOf(
-                    TextContent(
-                        text = "Error getting alerts: ${e.message}"
-                    )
-                ),
-                isError = true
-            )
         }
+    }.start(wait = true)
+}
+
+suspend fun handleJsonRpcRequest(
+    request: JsonRpcRequest,
+    getForecastUseCase: GetForecastUseCase,
+    getAlertsUseCase: GetAlertsUseCase,
+    json: Json
+): JsonRpcResponse {
+    return when (request.method) {
+        "tools/call" -> {
+            val params = request.params?.let { json.decodeFromJsonElement(ToolCallParams.serializer(), it) }
+                ?: return JsonRpcResponse(
+                    error = JsonRpcError(code = -32602, message = "Invalid params"),
+                    id = request.id
+                )
+
+            when (params.name) {
+                "get_forecast" -> handleGetForecast(params.arguments, getForecastUseCase, request.id)
+                "get_alerts" -> handleGetAlerts(params.arguments, getAlertsUseCase, request.id)
+                else -> JsonRpcResponse(
+                    error = JsonRpcError(code = -32601, message = "Tool not found: ${params.name}"),
+                    id = request.id
+                )
+            }
+        }
+        else -> JsonRpcResponse(
+            error = JsonRpcError(code = -32601, message = "Method not found: ${request.method}"),
+            id = request.id
+        )
     }
+}
 
-    // Connect STDIO transport
-    val transport = StdioServerTransport(
-        inputStream = System.`in` as Source,
-        outputStream = System.out as Sink
-    )
+suspend fun handleGetForecast(
+    arguments: JsonObject,
+    getForecastUseCase: GetForecastUseCase,
+    requestId: JsonElement
+): JsonRpcResponse {
+    return try {
+        val latitude = arguments["latitude"]?.jsonPrimitive?.doubleOrNull
+            ?: return JsonRpcResponse(
+                error = JsonRpcError(code = -32602, message = "Missing or invalid latitude"),
+                id = requestId
+            )
+        val longitude = arguments["longitude"]?.jsonPrimitive?.doubleOrNull
+            ?: return JsonRpcResponse(
+                error = JsonRpcError(code = -32602, message = "Missing or invalid longitude"),
+                id = requestId
+            )
 
-    server.connect(transport)
+        val forecasts = getForecastUseCase(latitude, longitude)
+
+        val responseText = buildString {
+            appendLine("Weather Forecast for ($latitude, $longitude):")
+            appendLine()
+            forecasts.take(7).forEach { forecast ->
+                appendLine("=== ${forecast.name} ===")
+                appendLine("Temperature: ${forecast.temperature}°${forecast.temperatureUnit}")
+                appendLine("Wind: ${forecast.windSpeed} ${forecast.windDirection}")
+                appendLine("Conditions: ${forecast.shortForecast}")
+                appendLine("Details: ${forecast.detailedForecast}")
+                appendLine()
+            }
+        }
+
+        val result = ToolCallResult(
+            content = listOf(ContentItem(text = responseText))
+        )
+
+        JsonRpcResponse(
+            result = Json.encodeToJsonElement(ToolCallResult.serializer(), result),
+            id = requestId
+        )
+    } catch (e: Exception) {
+        JsonRpcResponse(
+            error = JsonRpcError(code = -32603, message = "Error getting forecast: ${e.message}"),
+            id = requestId
+        )
+    }
+}
+
+suspend fun handleGetAlerts(
+    arguments: JsonObject,
+    getAlertsUseCase: GetAlertsUseCase,
+    requestId: JsonElement
+): JsonRpcResponse {
+    return try {
+        val state = arguments["state"]?.jsonPrimitive?.contentOrNull
+            ?: return JsonRpcResponse(
+                error = JsonRpcError(code = -32602, message = "Missing state parameter"),
+                id = requestId
+            )
+
+        val alerts = getAlertsUseCase(state)
+
+        val responseText = if (alerts.isEmpty()) {
+            "No active weather alerts for $state"
+        } else {
+            buildString {
+                appendLine("Active Weather Alerts for $state:")
+                appendLine()
+                alerts.forEach { alert ->
+                    appendLine("=== ${alert.event} ===")
+                    appendLine("Severity: ${alert.severity}")
+                    appendLine("Urgency: ${alert.urgency}")
+                    appendLine("Area: ${alert.areaDesc}")
+                    appendLine("Headline: ${alert.headline}")
+                    appendLine("Description: ${alert.description}")
+                    appendLine()
+                }
+            }
+        }
+
+        val result = ToolCallResult(
+            content = listOf(ContentItem(text = responseText))
+        )
+
+        JsonRpcResponse(
+            result = Json.encodeToJsonElement(ToolCallResult.serializer(), result),
+            id = requestId
+        )
+    } catch (e: Exception) {
+        JsonRpcResponse(
+            error = JsonRpcError(code = -32603, message = "Error getting alerts: ${e.message}"),
+            id = requestId
+        )
+    }
 }

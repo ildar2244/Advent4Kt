@@ -48,6 +48,9 @@ fun AiMessage.toOpenAiDto(): OpenAiMessageDto {
  * Извлекает текст из первого элемента массива choices.
  * OpenAI обычно возвращает один вариант ответа.
  *
+ * Если content null (например, при tool_calls), возвращает пустую строку или
+ * сообщение о tool_calls.
+ *
  * @param request Оригинальный запрос (используется для сохранения информации о модели)
  * @return Доменная модель ответа
  * @throws IllegalStateException если ответ не содержит вариантов (choices)
@@ -56,8 +59,16 @@ fun OpenAiChatResponse.toDomain(
     request: AiRequest,
     responseTimeMillis: Long,
 ): AiResponse {
-    val content = choices.firstOrNull()?.message?.content
+    val firstChoice = choices.firstOrNull()
         ?: throw IllegalStateException("OpenAI response has no choices")
+
+    // Content может быть null если модель вызывает инструменты (tool_calls)
+    val content = firstChoice.message.content
+        ?: if (firstChoice.message.toolCalls != null) {
+            "[AI is calling tools: ${firstChoice.message.toolCalls?.joinToString { it.function.name }}]"
+        } else {
+            ""
+        }
 
     val tokenUsage = TokenUsage(
         promptTokens = usage?.promptTokens ?: 0,

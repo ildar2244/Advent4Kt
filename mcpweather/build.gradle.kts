@@ -1,7 +1,10 @@
+import java.util.Properties
+
 plugins {
     id("java-library")
     alias(libs.plugins.jetbrains.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.buildconfig)
     application
 }
 
@@ -20,11 +23,24 @@ kotlin {
     }
 }
 
-dependencies {
-    // MCP SDK (exclude SSE as we only use STDIO transport)
-    implementation(libs.mcp.kotlin.sdk.server) {
-        exclude(group = "io.ktor", module = "ktor-server-sse")
+// Чтение local.properties
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { load(it) }
     }
+}
+
+// Настройка BuildConfig
+buildConfig {
+    packageName("com.example.mcpweather")
+    buildConfigField("String", "MCP_WEATHER_WS_HOST", "\"${localProperties.getProperty("MCP_WEATHER_WS_HOST", "localhost")}\"")
+    buildConfigField("Int", "MCP_WEATHER_WS_PORT", localProperties.getProperty("MCP_WEATHER_WS_PORT", "8765"))
+}
+
+dependencies {
+    // MCP SDK
+    implementation(libs.mcp.kotlin.sdk.server)
 
     // Ktor Client (for weather.gov API)
     implementation(libs.ktor.client.core)
@@ -33,8 +49,11 @@ dependencies {
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.client.logging)
 
-    // Ktor Server (required by MCP SDK)
+    // Ktor Server (for WebSocket MCP transport)
     implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.websockets)
+    implementation(libs.ktor.server.sse)  // Required by MCP SDK
 
     // Serialization
     implementation(libs.kotlinx.serialization.json)

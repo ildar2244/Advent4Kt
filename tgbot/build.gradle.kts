@@ -35,18 +35,17 @@ buildConfig {
     buildConfigField("String", "YANDEX_GPT_API_KEY", "\"${localProperties.getProperty("YANDEX_GPT_API_KEY", "")}\"")
     buildConfigField("String", "YANDEX_CLOUD_FOLDER_ID", "\"${localProperties.getProperty("YANDEX_CLOUD_FOLDER_ID", "")}\"")
     buildConfigField("String", "HUGGING_FACE_API_KEY", "\"${localProperties.getProperty("HUGGING_FACE_API_KEY", "")}\"")
+    buildConfigField("String", "MCP_WEATHER_WS_URL", "\"${localProperties.getProperty("MCP_WEATHER_WS_URL", "ws://localhost:8765/mcp")}\"")
 }
 
 dependencies {
-    // MCP Weather module
-    implementation(project(":mcpweather"))
-
-    // Ktor
+    // Ktor Client
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.client.logging)
+    implementation(libs.ktor.client.websockets)
 
     // Kotlinx Serialization
     implementation(libs.kotlinx.serialization.json)

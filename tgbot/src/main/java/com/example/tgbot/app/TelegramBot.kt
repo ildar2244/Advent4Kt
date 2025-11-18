@@ -3,15 +3,13 @@ package com.example.tgbot.app
 import com.example.tgbot.BuildConfig
 import com.example.tgbot.data.local.db.DatabaseFactory
 import com.example.tgbot.data.remote.TelegramApi
+import com.example.tgbot.data.remote.McpWebSocketClient
 import com.example.tgbot.data.remote.ai.ClaudeApiClient
 import com.example.tgbot.data.remote.ai.HuggingFaceApiClient
 import com.example.tgbot.data.remote.ai.OpenAiApiClient
 import com.example.tgbot.data.remote.ai.YandexGptApiClient
-import com.example.mcpweather.data.remote.WeatherGovApi
-import com.example.mcpweather.data.repository.WeatherRepositoryImpl
-import com.example.mcpweather.domain.usecase.GetAlertsUseCase
-import com.example.mcpweather.domain.usecase.GetForecastUseCase
 import com.example.tgbot.data.repository.AiRepositoryImpl
+import com.example.tgbot.data.repository.GeocodingRepositoryImpl
 import com.example.tgbot.data.repository.McpRepositoryImpl
 import com.example.tgbot.data.repository.SummaryRepositoryImpl
 import com.example.tgbot.data.repository.TelegramRepositoryImpl
@@ -24,6 +22,7 @@ import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.logging.*
+import io.ktor.client.plugins.websocket.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -52,6 +51,8 @@ class TelegramBot(private val token: String) {
             json(Json {
                 ignoreUnknownKeys = true // Игнорируем неизвестные поля в JSON
                 isLenient = true // Более мягкий парсинг JSON
+                encodeDefaults = true // ВАЖНО: сериализуем default values (для OpenAI tools type="function")
+                explicitNulls = false // Не включаем null поля в JSON (убирает tool_calls:null и т.д.)
             })
         }
 
@@ -74,6 +75,9 @@ class TelegramBot(private val token: String) {
             socketTimeoutMillis = 40000   // Таймаут сокета
         }
 
+        // WebSockets для MCP Weather
+        install(WebSockets)
+
         // Retry механизм для сетевых ошибок
         install(HttpRequestRetry) {
             retryOnServerErrors(maxRetries = 3)
@@ -92,8 +96,23 @@ class TelegramBot(private val token: String) {
     private val api = TelegramApi(httpClient, token)
     private val telegramRepository = TelegramRepositoryImpl(api)
 
+    // Инициализация MCP Weather WebSocket Client (перенесено выше для использования в OpenAI)
+    private val mcpWebSocketClient = McpWebSocketClient(
+        httpClient = httpClient,
+        wsUrl = BuildConfig.MCP_WEATHER_WS_URL
+    )
+    private val mcpRepository = McpRepositoryImpl(mcpWebSocketClient)
+
+    // Инициализация Geocoding Repository для конвертации городов в координаты
+    private val geocodingRepository = GeocodingRepositoryImpl(httpClient)
+
     // Инициализация AI клиентов
-    private val openAiClient = OpenAiApiClient(httpClient, BuildConfig.OPENAI_API_KEY)
+    private val openAiClient = OpenAiApiClient(
+        httpClient,
+        BuildConfig.OPENAI_API_KEY,
+        mcpRepository,
+        geocodingRepository
+    )
     private val claudeClient = ClaudeApiClient(httpClient, BuildConfig.CLAUDE_API_KEY)
     private val yandexGptClient = YandexGptApiClient(
         httpClient,
@@ -117,13 +136,6 @@ class TelegramBot(private val token: String) {
     // Инициализация репозитория для работы с БД
     private val summaryRepository = SummaryRepositoryImpl()
 
-    // Инициализация MCP Weather
-    private val weatherGovApi = WeatherGovApi(httpClient)
-    private val weatherRepository = WeatherRepositoryImpl(weatherGovApi)
-    private val getForecastUseCase = GetForecastUseCase(weatherRepository)
-    private val getAlertsUseCase = GetAlertsUseCase(weatherRepository)
-    private val mcpRepository = McpRepositoryImpl(getForecastUseCase, getAlertsUseCase)
-
     // Инициализация use cases
     private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor, summaryRepository, mcpRepository)
     private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository, mcpRepository)
@@ -139,6 +151,20 @@ class TelegramBot(private val token: String) {
     suspend fun start() {
         isRunning = true
         println("Бот запущен. Ожидание сообщений...")
+
+        // Подключение к MCP Weather WebSocket серверу
+        try {
+            println("🔌 Подключение к MCP Weather WebSocket: ${BuildConfig.MCP_WEATHER_WS_URL}")
+            println("   Ожидание установки соединения (таймаут 5 секунд)...")
+            mcpWebSocketClient.connect()
+            println("✅ Подключено к MCP Weather WebSocket успешно!")
+        } catch (e: Exception) {
+            println("⚠️ Не удалось подключиться к MCP Weather WebSocket: ${e.message}")
+            println("   ${e.javaClass.simpleName}: ${e.stackTraceToString().take(500)}")
+            println("   Функции погоды будут недоступны. Бот продолжит работу...")
+        }
+
+        println("✅ Telegram бот готов к работе")
 
         while (isRunning) {
             try {
@@ -188,8 +214,17 @@ class TelegramBot(private val token: String) {
     /**
      * Останавливает работу бота и закрывает HTTP-клиент.
      */
-    fun stop() {
+    suspend fun stop() {
         isRunning = false
+
+        // Отключение от MCP Weather WebSocket
+        try {
+            mcpWebSocketClient.disconnect()
+            println("🔌 Отключено от MCP Weather WebSocket")
+        } catch (e: Exception) {
+            println("⚠️ Ошибка при отключении от MCP Weather WebSocket: ${e.message}")
+        }
+
         httpClient.close()
         println("Бот остановлен")
     }
@@ -232,7 +267,9 @@ fun main() = runBlocking {
 
     // Регистрируем обработчик остановки для корректного завершения
     Runtime.getRuntime().addShutdownHook(Thread {
-        bot.stop()
+        runBlocking {
+            bot.stop()
+        }
     })
 
     bot.start()

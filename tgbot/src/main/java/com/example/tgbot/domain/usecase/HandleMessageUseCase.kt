@@ -15,7 +15,6 @@ import com.example.tgbot.domain.repository.SummaryRepository
 import com.example.tgbot.domain.repository.TelegramRepository
 import com.example.tgbot.domain.service.HistoryCompressor
 import com.example.tgbot.domain.util.TokenCounter
-import com.example.tgbot.domain.util.WeatherFormatter
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 
@@ -88,14 +87,12 @@ class HandleMessageUseCase(
             println("📍 Location received: lat=${location.latitude}, lon=${location.longitude}")
             telegramRepository.sendMessage(chatId, "Fetching weather forecast...")
 
-            println("🌤 Calling weather API...")
-            val forecasts = mcpRepository.getForecast(location.latitude, location.longitude)
-            println("✅ Got ${forecasts.size} forecast periods")
-
-            val formattedForecast = WeatherFormatter.formatBrief(forecasts)
+            println("🌤 Calling MCP Weather WebSocket...")
+            val forecastText = mcpRepository.getForecast(location.latitude, location.longitude)
+            println("✅ Got forecast from MCP server")
             println("📤 Sending formatted forecast to user")
 
-            telegramRepository.sendMessage(chatId, formattedForecast)
+            telegramRepository.sendMessage(chatId, forecastText)
         } catch (e: Exception) {
             println("❌ Error getting weather forecast: ${e.message}")
             e.printStackTrace()
