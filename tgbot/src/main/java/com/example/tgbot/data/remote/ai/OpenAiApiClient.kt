@@ -26,17 +26,19 @@ import org.slf4j.LoggerFactory
  * Использует ProxyAPI (api.proxyapi.ru) в качестве промежуточного сервера
  * для доступа к OpenAI Chat Completions API.
  *
- * Поддерживает OpenAI Function Calling для интеграции с MCP инструментами (get_forecast, get_alerts).
+ * Поддерживает OpenAI Function Calling для интеграции с MCP инструментами (get_forecast, get_alerts, add_task, get_recent_tasks, get_tasks_count_today).
  *
  * @property client Настроенный HTTP-клиент Ktor
  * @property apiKey API-ключ для ProxyAPI (OPENAI_API_KEY)
  * @property mcpRepository Repository для вызова MCP инструментов (weather tools)
+ * @property tasksRepository Repository для вызова Tasks MCP инструментов
  * @property geocodingRepository Repository для геокодинга (конвертация городов в координаты)
  */
 class OpenAiApiClient(
     private val client: HttpClient,
     private val apiKey: String,
     private val mcpRepository: McpRepository,
+    private val tasksRepository: com.example.tgbot.domain.repository.TasksRepository,
     private val geocodingRepository: GeocodingRepository
 ) : AiApiClient {
 
@@ -244,6 +246,26 @@ class OpenAiApiClient(
                     } else {
                         mcpRepository.getAlerts(state.uppercase())
                     }
+                }
+
+                "add_task" -> {
+                    val args = json.parseToJsonElement(argumentsJson).jsonObject
+                    val title = args["title"]?.jsonPrimitive?.content
+                    val description = args["description"]?.jsonPrimitive?.content
+
+                    if (title.isNullOrBlank() || description.isNullOrBlank()) {
+                        "Error: Both 'title' and 'description' are required to create a task."
+                    } else {
+                        tasksRepository.addTask(title, description)
+                    }
+                }
+
+                "get_recent_tasks" -> {
+                    tasksRepository.getRecentTasks()
+                }
+
+                "get_tasks_count_today" -> {
+                    tasksRepository.getTasksCountToday()
                 }
 
                 else -> {

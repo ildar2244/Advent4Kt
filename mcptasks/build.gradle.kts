@@ -5,6 +5,11 @@ plugins {
     alias(libs.plugins.jetbrains.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.buildconfig)
+    application
+}
+
+application {
+    mainClass.set("com.example.mcptasks.app.TasksMcpServerKt")
 }
 
 java {
@@ -28,41 +33,48 @@ val localProperties = Properties().apply {
 
 // Настройка BuildConfig
 buildConfig {
-    packageName("com.example.tgbot")
-    buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"${localProperties.getProperty("TELEGRAM_BOT_TOKEN", "")}\"")
-    buildConfigField("String", "OPENAI_API_KEY", "\"${localProperties.getProperty("OPENAI_API_KEY", "")}\"")
-    buildConfigField("String", "CLAUDE_API_KEY", "\"${localProperties.getProperty("CLAUDE_API_KEY", "")}\"")
+    packageName("com.example.mcptasks")
+    buildConfigField("String", "MCP_TASKS_WS_HOST", "\"${localProperties.getProperty("MCP_TASKS_WS_HOST", "localhost")}\"")
+    buildConfigField("Int", "MCP_TASKS_WS_PORT", localProperties.getProperty("MCP_TASKS_WS_PORT", "8766"))
+    buildConfigField("String", "MCP_TASKS_DB_PATH", "\"${localProperties.getProperty("MCP_TASKS_DB_PATH", "./data/tasks.db")}\"")
+
+    // YandexGPT API configuration
     buildConfigField("String", "YANDEX_GPT_API_KEY", "\"${localProperties.getProperty("YANDEX_GPT_API_KEY", "")}\"")
     buildConfigField("String", "YANDEX_CLOUD_FOLDER_ID", "\"${localProperties.getProperty("YANDEX_CLOUD_FOLDER_ID", "")}\"")
-    buildConfigField("String", "HUGGING_FACE_API_KEY", "\"${localProperties.getProperty("HUGGING_FACE_API_KEY", "")}\"")
-    buildConfigField("String", "MCP_WEATHER_WS_URL", "\"${localProperties.getProperty("MCP_WEATHER_WS_URL", "ws://localhost:8765/mcp")}\"")
-    buildConfigField("String", "MCP_TASKS_WS_URL", "\"${localProperties.getProperty("MCP_TASKS_WS_URL", "ws://localhost:8766/mcp")}\"")
+
+    // Telegram API configuration
+    buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"${localProperties.getProperty("TELEGRAM_BOT_TOKEN", "")}\"")
+    buildConfigField("String", "TELEGRAM_CHANNEL_CHAT_ID", "\"${localProperties.getProperty("TELEGRAM_CHANNEL_CHAT_ID", "")}\"")
 }
 
 dependencies {
-    // Ktor Client
+    // Ktor Server (for WebSocket MCP transport)
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.websockets)
+
+    // Ktor Client (for YandexGPT and Telegram API)
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.client.logging)
-    implementation(libs.ktor.client.websockets)
 
-    // Kotlinx Serialization
+    // Serialization
     implementation(libs.kotlinx.serialization.json)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.core)
 
-    // Logging
-    implementation(libs.slf4j.simple)
-
-    // Exposed ORM
+    // Exposed ORM for SQLite
     implementation(libs.exposed.core)
     implementation(libs.exposed.dao)
     implementation(libs.exposed.jdbc)
     implementation(libs.exposed.java.time)
 
-    // SQLite JDBC
+    // SQLite JDBC Driver
     implementation(libs.sqlite.jdbc)
+
+    // Logging
+    implementation(libs.slf4j.simple)
 }

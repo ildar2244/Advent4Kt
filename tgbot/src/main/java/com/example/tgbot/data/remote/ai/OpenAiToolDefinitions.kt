@@ -6,18 +6,24 @@ import kotlinx.serialization.json.*
 
 /**
  * Определения инструментов MCP для OpenAI Function Calling API.
- * Содержит описания функций get_forecast и get_alerts в формате OpenAI tools.
+ * Содержит описания функций get_forecast, get_alerts (Weather MCP)
+ * и add_task, get_recent_tasks, get_tasks_count_today (Tasks MCP).
  */
 object OpenAiToolDefinitions {
 
     /**
      * Получить список всех доступных MCP инструментов для OpenAI.
-     * @return Список OpenAiTool с определениями get_forecast и get_alerts
+     * @return Список OpenAiTool с определениями Weather и Tasks MCP инструментов
      */
     fun getMcpTools(): List<OpenAiTool> {
         return listOf(
+            // Weather MCP tools
             createGetForecastTool(),
-            createGetAlertsTool()
+            createGetAlertsTool(),
+            // Tasks MCP tools
+            createAddTaskTool(),
+            createGetRecentTasksTool(),
+            createGetTasksCountTodayTool()
         )
     }
 
@@ -89,6 +95,89 @@ object OpenAiToolDefinitions {
                 description = "Get active weather alerts for a US state. " +
                         "Returns severe weather warnings, watches, and advisories issued by the National Weather Service. " +
                         "Use this when user asks about weather alerts, warnings, or severe weather in a US state.",
+                parameters = parameters
+            )
+        )
+    }
+
+    /**
+     * Создать определение инструмента add_task.
+     * Создает новую задачу с названием и описанием.
+     */
+    private fun createAddTaskTool(): OpenAiTool {
+        val parameters = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("title") {
+                    put("type", "string")
+                    put("description", "Название задачи (краткое описание)")
+                }
+                putJsonObject("description") {
+                    put("type", "string")
+                    put("description", "Подробное описание задачи")
+                }
+            }
+            putJsonArray("required") {
+                add("title")
+                add("description")
+            }
+        }
+
+        return OpenAiTool(
+            type = "function",
+            function = FunctionDefinition(
+                name = "add_task",
+                description = "Create a new task with title and description. " +
+                        "Tasks are stored in SQLite database with automatic timestamp. " +
+                        "Use this when user wants to create, add, or save a new task.",
+                parameters = parameters
+            )
+        )
+    }
+
+    /**
+     * Создать определение инструмента get_recent_tasks.
+     * Получает последние 3 задачи, созданные сегодня.
+     */
+    private fun createGetRecentTasksTool(): OpenAiTool {
+        val parameters = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                // No parameters needed
+            }
+        }
+
+        return OpenAiTool(
+            type = "function",
+            function = FunctionDefinition(
+                name = "get_recent_tasks",
+                description = "Get the last 3 tasks created today. " +
+                        "Returns task details including ID, title, description, and creation time. " +
+                        "Use this when user wants to see recent tasks, what was added today, or review today's tasks.",
+                parameters = parameters
+            )
+        )
+    }
+
+    /**
+     * Создать определение инструмента get_tasks_count_today.
+     * Получает количество задач, созданных сегодня.
+     */
+    private fun createGetTasksCountTodayTool(): OpenAiTool {
+        val parameters = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                // No parameters needed
+            }
+        }
+
+        return OpenAiTool(
+            type = "function",
+            function = FunctionDefinition(
+                name = "get_tasks_count_today",
+                description = "Get the total count of tasks created today. " +
+                        "Returns a simple number indicating how many tasks were created today. " +
+                        "Use this when user asks how many tasks were created, task statistics for today, or productivity metrics.",
                 parameters = parameters
             )
         )

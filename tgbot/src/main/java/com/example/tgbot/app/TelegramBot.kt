@@ -4,6 +4,7 @@ import com.example.tgbot.BuildConfig
 import com.example.tgbot.data.local.db.DatabaseFactory
 import com.example.tgbot.data.remote.TelegramApi
 import com.example.tgbot.data.remote.McpWebSocketClient
+import com.example.tgbot.data.remote.TasksWebSocketClient
 import com.example.tgbot.data.remote.ai.ClaudeApiClient
 import com.example.tgbot.data.remote.ai.HuggingFaceApiClient
 import com.example.tgbot.data.remote.ai.OpenAiApiClient
@@ -11,6 +12,7 @@ import com.example.tgbot.data.remote.ai.YandexGptApiClient
 import com.example.tgbot.data.repository.AiRepositoryImpl
 import com.example.tgbot.data.repository.GeocodingRepositoryImpl
 import com.example.tgbot.data.repository.McpRepositoryImpl
+import com.example.tgbot.data.repository.TasksRepositoryImpl
 import com.example.tgbot.data.repository.SummaryRepositoryImpl
 import com.example.tgbot.data.repository.TelegramRepositoryImpl
 import com.example.tgbot.domain.service.HistoryCompressor
@@ -103,6 +105,13 @@ class TelegramBot(private val token: String) {
     )
     private val mcpRepository = McpRepositoryImpl(mcpWebSocketClient)
 
+    // Инициализация MCP Tasks WebSocket Client
+    private val tasksWebSocketClient = TasksWebSocketClient(
+        httpClient = httpClient,
+        wsUrl = BuildConfig.MCP_TASKS_WS_URL
+    )
+    private val tasksRepository = TasksRepositoryImpl(tasksWebSocketClient)
+
     // Инициализация Geocoding Repository для конвертации городов в координаты
     private val geocodingRepository = GeocodingRepositoryImpl(httpClient)
 
@@ -111,6 +120,7 @@ class TelegramBot(private val token: String) {
         httpClient,
         BuildConfig.OPENAI_API_KEY,
         mcpRepository,
+        tasksRepository,
         geocodingRepository
     )
     private val claudeClient = ClaudeApiClient(httpClient, BuildConfig.CLAUDE_API_KEY)
@@ -162,6 +172,18 @@ class TelegramBot(private val token: String) {
             println("⚠️ Не удалось подключиться к MCP Weather WebSocket: ${e.message}")
             println("   ${e.javaClass.simpleName}: ${e.stackTraceToString().take(500)}")
             println("   Функции погоды будут недоступны. Бот продолжит работу...")
+        }
+
+        // Подключение к MCP Tasks WebSocket серверу
+        try {
+            println("🔌 Подключение к MCP Tasks WebSocket: ${BuildConfig.MCP_TASKS_WS_URL}")
+            println("   Ожидание установки соединения (таймаут 5 секунд)...")
+            tasksWebSocketClient.connect()
+            println("✅ Подключено к MCP Tasks WebSocket успешно!")
+        } catch (e: Exception) {
+            println("⚠️ Не удалось подключиться к MCP Tasks WebSocket: ${e.message}")
+            println("   ${e.javaClass.simpleName}: ${e.stackTraceToString().take(500)}")
+            println("   Функции задач будут недоступны. Бот продолжит работу...")
         }
 
         println("✅ Telegram бот готов к работе")
@@ -223,6 +245,14 @@ class TelegramBot(private val token: String) {
             println("🔌 Отключено от MCP Weather WebSocket")
         } catch (e: Exception) {
             println("⚠️ Ошибка при отключении от MCP Weather WebSocket: ${e.message}")
+        }
+
+        // Отключение от MCP Tasks WebSocket
+        try {
+            tasksWebSocketClient.disconnect()
+            println("🔌 Отключено от MCP Tasks WebSocket")
+        } catch (e: Exception) {
+            println("⚠️ Ошибка при отключении от MCP Tasks WebSocket: ${e.message}")
         }
 
         httpClient.close()
