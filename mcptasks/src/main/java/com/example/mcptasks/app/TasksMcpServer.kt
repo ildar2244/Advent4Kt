@@ -9,6 +9,8 @@ import com.example.mcptasks.domain.usecase.AddTaskUseCase
 import com.example.mcptasks.domain.usecase.GenerateDailySummaryUseCase
 import com.example.mcptasks.domain.usecase.GetRecentTasksTodayUseCase
 import com.example.mcptasks.domain.usecase.GetTasksCountTodayUseCase
+import com.example.mcptasks.domain.usecase.SearchTasksUseCase
+import com.example.mcptasks.domain.usecase.SendTasksToTelegramUseCase
 import io.ktor.client.*
 import io.ktor.client.engine.cio.CIO as ClientCIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -118,6 +120,7 @@ suspend fun startServer(json: Json) {
     val addTaskUseCase = AddTaskUseCase(tasksRepository)
     val getRecentTasksTodayUseCase = GetRecentTasksTodayUseCase(tasksRepository)
     val getTasksCountTodayUseCase = GetTasksCountTodayUseCase(tasksRepository)
+    val searchTasksUseCase = SearchTasksUseCase(tasksRepository)
 
     // Initialize YandexGPT API Client
     val yandexGptClient = YandexGptApiClient(
@@ -130,6 +133,13 @@ suspend fun startServer(json: Json) {
     val telegramClient = TelegramApiClient(
         client = httpClient,
         botToken = BuildConfig.TELEGRAM_BOT_TOKEN
+    )
+
+    // Initialize Send Tasks to Telegram Use Case
+    val sendTasksToTelegramUseCase = SendTasksToTelegramUseCase(
+        repository = tasksRepository,
+        telegramClient = telegramClient,
+        channelChatId = BuildConfig.TELEGRAM_CHANNEL_CHAT_ID
     )
 
     // Initialize Daily Summary Use Case
@@ -188,6 +198,8 @@ suspend fun startServer(json: Json) {
                                         addTaskUseCase,
                                         getRecentTasksTodayUseCase,
                                         getTasksCountTodayUseCase,
+                                        searchTasksUseCase,
+                                        sendTasksToTelegramUseCase,
                                         json
                                     )
                                     val responseJson = json.encodeToString(JsonRpcResponse.serializer(), response)
@@ -224,6 +236,8 @@ suspend fun handleJsonRpcRequest(
     addTaskUseCase: AddTaskUseCase,
     getRecentTasksTodayUseCase: GetRecentTasksTodayUseCase,
     getTasksCountTodayUseCase: GetTasksCountTodayUseCase,
+    searchTasksUseCase: SearchTasksUseCase,
+    sendTasksToTelegramUseCase: SendTasksToTelegramUseCase,
     json: Json
 ): JsonRpcResponse {
     return when (request.method) {
@@ -238,6 +252,8 @@ suspend fun handleJsonRpcRequest(
                 "add_task" -> handleAddTask(params.arguments, addTaskUseCase, request.id)
                 "get_recent_tasks" -> handleGetRecentTasks(getRecentTasksTodayUseCase, request.id)
                 "get_tasks_count_today" -> handleGetTasksCountToday(getTasksCountTodayUseCase, request.id)
+                "search_tasks" -> handleSearchTasks(params.arguments, searchTasksUseCase, request.id)
+                "send_tasks_to_telegram" -> handleSendTasksToTelegram(params.arguments, sendTasksToTelegramUseCase, request.id)
                 else -> JsonRpcResponse(
                     error = JsonRpcError(code = -32601, message = "Tool not found: ${params.name}"),
                     id = request.id
@@ -356,6 +372,93 @@ suspend fun handleGetTasksCountToday(
     } catch (e: Exception) {
         JsonRpcResponse(
             error = JsonRpcError(code = -32603, message = "Error getting tasks count: ${e.message}"),
+            id = requestId
+        )
+    }
+}
+
+suspend fun handleSearchTasks(
+    arguments: JsonObject,
+    searchTasksUseCase: SearchTasksUseCase,
+    requestId: JsonElement
+): JsonRpcResponse {
+    return try {
+        val query = arguments["query"]?.jsonPrimitive?.contentOrNull
+            ?: return JsonRpcResponse(
+                error = JsonRpcError(code = -32602, message = "Missing or invalid query"),
+                id = requestId
+            )
+
+        val tasks = searchTasksUseCase(query)
+
+        val formatter = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
+        val responseText = if (tasks.isEmpty()) {
+            "🔍 По запросу \"$query\" задач не найдено (за последние 7 дней)"
+        } else {
+            buildString {
+                appendLine("🔍 Найдено задач по запросу \"$query\": ${tasks.size}")
+                appendLine()
+                tasks.forEachIndexed { index, task ->
+                    appendLine("${index + 1}. ${task.title}")
+                    appendLine("   ID: ${task.id}")
+                    appendLine("   Описание: ${task.description}")
+                    appendLine("   Создано: ${task.createdAt.format(formatter)}")
+                    appendLine()
+                }
+            }
+        }
+
+        val result = ToolCallResult(
+            content = listOf(ContentItem(text = responseText))
+        )
+
+        JsonRpcResponse(
+            result = Json.encodeToJsonElement(ToolCallResult.serializer(), result),
+            id = requestId
+        )
+    } catch (e: Exception) {
+        JsonRpcResponse(
+            error = JsonRpcError(code = -32603, message = "Error searching tasks: ${e.message}"),
+            id = requestId
+        )
+    }
+}
+
+suspend fun handleSendTasksToTelegram(
+    arguments: JsonObject,
+    sendTasksToTelegramUseCase: SendTasksToTelegramUseCase,
+    requestId: JsonElement
+): JsonRpcResponse {
+    return try {
+        val taskIdsArray = arguments["task_ids"]?.jsonPrimitive?.contentOrNull
+            ?: return JsonRpcResponse(
+                error = JsonRpcError(code = -32602, message = "Missing or invalid task_ids"),
+                id = requestId
+            )
+
+        // Parse comma-separated IDs or JSON array format
+        val taskIds = try {
+            taskIdsArray.split(",").map { it.trim().toLong() }
+        } catch (e: Exception) {
+            return JsonRpcResponse(
+                error = JsonRpcError(code = -32602, message = "Invalid task_ids format. Use comma-separated numbers (e.g., '1,2,3')"),
+                id = requestId
+            )
+        }
+
+        val resultMessage = sendTasksToTelegramUseCase(taskIds)
+
+        val result = ToolCallResult(
+            content = listOf(ContentItem(text = resultMessage))
+        )
+
+        JsonRpcResponse(
+            result = Json.encodeToJsonElement(ToolCallResult.serializer(), result),
+            id = requestId
+        )
+    } catch (e: Exception) {
+        JsonRpcResponse(
+            error = JsonRpcError(code = -32603, message = "Error sending tasks to Telegram: ${e.message}"),
             id = requestId
         )
     }

@@ -26,4 +26,18 @@ interface TasksRepository {
      * @return Formatted count of tasks
      */
     suspend fun getTasksCountToday(): String
+
+    /**
+     * Search tasks by query in title and description (last 7 days)
+     * @param query Search query string
+     * @return Formatted list of found tasks
+     */
+    suspend fun searchTasks(query: String): String
+
+    /**
+     * Send tasks to Telegram channel
+     * @param taskIds List of task IDs to send
+     * @return Result message
+     */
+    suspend fun sendTasksToTelegram(taskIds: List<Long>): String
 }

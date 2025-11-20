@@ -52,23 +52,31 @@ fun AiMessage.toOpenAiDto(): OpenAiMessageDto {
  * сообщение о tool_calls.
  *
  * @param request Оригинальный запрос (используется для сохранения информации о модели)
+ * @param responseTimeMillis Время выполнения запроса в миллисекундах
+ * @param usedTools Список имен использованных MCP инструментов (опционально)
  * @return Доменная модель ответа
  * @throws IllegalStateException если ответ не содержит вариантов (choices)
  */
 fun OpenAiChatResponse.toDomain(
     request: AiRequest,
     responseTimeMillis: Long,
+    usedTools: List<String> = emptyList()
 ): AiResponse {
     val firstChoice = choices.firstOrNull()
         ?: throw IllegalStateException("OpenAI response has no choices")
 
     // Content может быть null если модель вызывает инструменты (tool_calls)
-    val content = firstChoice.message.content
+    var content = firstChoice.message.content
         ?: if (firstChoice.message.toolCalls != null) {
             "[AI is calling tools: ${firstChoice.message.toolCalls?.joinToString { it.function.name }}]"
         } else {
             ""
         }
+
+    // Добавляем информацию об использованных инструментах, если они были
+    if (usedTools.isNotEmpty()) {
+        content += "\n\n🔧 Использованы: ${usedTools.joinToString(", ")}"
+    }
 
     val tokenUsage = TokenUsage(
         promptTokens = usage?.promptTokens ?: 0,

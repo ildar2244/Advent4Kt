@@ -70,6 +70,9 @@ class OpenAiApiClient(
         val startTime = System.currentTimeMillis()
         var requestDto = request.toOpenAiDto()
 
+        // Список использованных MCP инструментов для отображения в ответе
+        val usedTools = mutableListOf<String>()
+
         // Добавляем MCP tools в запрос
         requestDto = requestDto.copy(
             tools = OpenAiToolDefinitions.getMcpTools(),
@@ -138,7 +141,7 @@ class OpenAiApiClient(
             // Если нет tool_calls или finish_reason == "stop", возвращаем финальный ответ
             if (responseMessage?.toolCalls.isNullOrEmpty() || finishReason == "stop") {
                 val responseTimeMillis = System.currentTimeMillis() - startTime
-                return response.toDomain(request, responseTimeMillis)
+                return response.toDomain(request, responseTimeMillis, usedTools)
             }
 
             // Обрабатываем tool calls
@@ -156,8 +159,13 @@ class OpenAiApiClient(
 
             // Выполняем каждый tool call и добавляем результаты
             for (toolCall in toolCalls) {
+                val toolName = toolCall.function.name
+
+                // Добавляем имя инструмента в список использованных
+                usedTools.add(toolName)
+
                 val toolResult = executeToolCall(
-                    toolName = toolCall.function.name,
+                    toolName = toolName,
                     argumentsJson = toolCall.function.arguments
                 )
 
@@ -166,11 +174,11 @@ class OpenAiApiClient(
                         role = "tool",
                         content = toolResult,
                         toolCallId = toolCall.id,
-                        name = toolCall.function.name
+                        name = toolName
                     )
                 )
 
-                logger.info("Tool '${toolCall.function.name}' executed, result length: ${toolResult.length}")
+                logger.info("Tool '$toolName' executed, result length: ${toolResult.length}")
             }
         }
 
@@ -210,7 +218,7 @@ class OpenAiApiClient(
             throw e
         }
 
-        return finalResponse.toDomain(request, responseTimeMillis)
+        return finalResponse.toDomain(request, responseTimeMillis, usedTools)
     }
 
     /**
@@ -266,6 +274,35 @@ class OpenAiApiClient(
 
                 "get_tasks_count_today" -> {
                     tasksRepository.getTasksCountToday()
+                }
+
+                "search_tasks" -> {
+                    val args = json.parseToJsonElement(argumentsJson).jsonObject
+                    val query = args["query"]?.jsonPrimitive?.content
+
+                    if (query.isNullOrBlank()) {
+                        "Error: Search query is required."
+                    } else if (query.length < 2) {
+                        "Error: Search query must be at least 2 characters long."
+                    } else {
+                        tasksRepository.searchTasks(query)
+                    }
+                }
+
+                "send_tasks_to_telegram" -> {
+                    val args = json.parseToJsonElement(argumentsJson).jsonObject
+                    val taskIdsElement = args["task_ids"]
+
+                    if (taskIdsElement == null || taskIdsElement !is kotlinx.serialization.json.JsonArray) {
+                        "Error: Task IDs array is required and cannot be empty."
+                    } else {
+                        try {
+                            val taskIds = taskIdsElement.map { it.jsonPrimitive.content.toLong() }
+                            tasksRepository.sendTasksToTelegram(taskIds)
+                        } catch (e: Exception) {
+                            "Error: Invalid task IDs format. Expected array of integers."
+                        }
+                    }
                 }
 
                 else -> {

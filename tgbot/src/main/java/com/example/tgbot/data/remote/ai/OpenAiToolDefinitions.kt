@@ -23,7 +23,9 @@ object OpenAiToolDefinitions {
             // Tasks MCP tools
             createAddTaskTool(),
             createGetRecentTasksTool(),
-            createGetTasksCountTodayTool()
+            createGetTasksCountTodayTool(),
+            createSearchTasksTool(),
+            createSendTasksToTelegramTool()
         )
     }
 
@@ -178,6 +180,71 @@ object OpenAiToolDefinitions {
                 description = "Get the total count of tasks created today. " +
                         "Returns a simple number indicating how many tasks were created today. " +
                         "Use this when user asks how many tasks were created, task statistics for today, or productivity metrics.",
+                parameters = parameters
+            )
+        )
+    }
+
+    /**
+     * Создать определение инструмента search_tasks.
+     * Поиск задач по ключевым словам в названии и описании за последние 7 дней.
+     */
+    private fun createSearchTasksTool(): OpenAiTool {
+        val parameters = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("query") {
+                    put("type", "string")
+                    put("description", "Поисковый запрос для поиска в названии и описании задач (минимум 2 символа)")
+                }
+            }
+            putJsonArray("required") {
+                add("query")
+            }
+        }
+
+        return OpenAiTool(
+            type = "function",
+            function = FunctionDefinition(
+                name = "search_tasks",
+                description = "Search tasks by keywords in title and description (last 7 days). " +
+                        "Returns list of matching tasks with IDs, titles, descriptions, and creation dates. " +
+                        "Search is case-insensitive. " +
+                        "Use this when user wants to find, search, or look for specific tasks by keywords.",
+                parameters = parameters
+            )
+        )
+    }
+
+    /**
+     * Создать определение инструмента send_tasks_to_telegram.
+     * Отправка задач в Telegram канал по их ID.
+     */
+    private fun createSendTasksToTelegramTool(): OpenAiTool {
+        val parameters = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("task_ids") {
+                    put("type", "array")
+                    putJsonObject("items") {
+                        put("type", "integer")
+                    }
+                    put("description", "Массив ID задач для отправки в Telegram канал")
+                }
+            }
+            putJsonArray("required") {
+                add("task_ids")
+            }
+        }
+
+        return OpenAiTool(
+            type = "function",
+            function = FunctionDefinition(
+                name = "send_tasks_to_telegram",
+                description = "Send specified tasks to Telegram channel. " +
+                        "Accepts array of task IDs and sends them as formatted message to configured channel. " +
+                        "All tasks are sent in a single message with proper formatting. " +
+                        "Use this when user wants to share, send, or publish tasks to Telegram channel.",
                 parameters = parameters
             )
         )

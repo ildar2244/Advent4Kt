@@ -67,6 +67,39 @@ class TasksRepositoryImpl : TasksRepository {
     }
 
     /**
+     * Поиск задач по ключевым словам за последние 7 дней
+     */
+    override suspend fun searchTasks(query: String): List<Task> = dbQuery {
+        val sevenDaysAgo = LocalDateTime.now().minusDays(7)
+        val queryLowerCase = query.lowercase()
+
+        TasksTable
+            .selectAll()
+            .where {
+                (TasksTable.createdAt greaterEq sevenDaysAgo) and
+                        ((LowerCase(TasksTable.title) like "%$queryLowerCase%") or
+                         (LowerCase(TasksTable.description) like "%$queryLowerCase%"))
+            }
+            .orderBy(TasksTable.createdAt, SortOrder.DESC)
+            .map { it.toTask() }
+    }
+
+    /**
+     * Получить задачи по списку ID
+     */
+    override suspend fun getTasksByIds(ids: List<Long>): List<Task> = dbQuery {
+        if (ids.isEmpty()) {
+            return@dbQuery emptyList()
+        }
+
+        TasksTable
+            .selectAll()
+            .where { TasksTable.id inList ids }
+            .orderBy(TasksTable.createdAt, SortOrder.DESC)
+            .map { it.toTask() }
+    }
+
+    /**
      * Маппер ResultRow -> Task
      */
     private fun ResultRow.toTask() = Task(

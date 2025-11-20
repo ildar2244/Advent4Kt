@@ -30,4 +30,20 @@ interface TasksRepository {
      * @return Количество задач, созданных сегодня
      */
     suspend fun getTasksCountToday(): Int
+
+    /**
+     * Поиск задач по ключевым словам в названии и описании за последние 7 дней
+     *
+     * @param query Поисковый запрос
+     * @return Список найденных задач, отсортированных по времени создания (новые первыми)
+     */
+    suspend fun searchTasks(query: String): List<Task>
+
+    /**
+     * Получить задачи по списку ID
+     *
+     * @param ids Список ID задач
+     * @return Список задач с указанными ID
+     */
+    suspend fun getTasksByIds(ids: List<Long>): List<Task>
 }
