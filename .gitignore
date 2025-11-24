@@ -14,3 +14,4 @@ local.properties
 /token_usage.log
 /token_journal/
 *.db
+/examples
