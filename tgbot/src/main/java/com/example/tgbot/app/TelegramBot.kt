@@ -12,6 +12,7 @@ import com.example.tgbot.data.remote.ai.YandexGptApiClient
 import com.example.tgbot.data.repository.AiRepositoryImpl
 import com.example.tgbot.data.repository.GeocodingRepositoryImpl
 import com.example.tgbot.data.repository.McpRepositoryImpl
+import com.example.tgbot.data.repository.RagRepositoryImpl
 import com.example.tgbot.data.repository.TasksRepositoryImpl
 import com.example.tgbot.data.repository.SummaryRepositoryImpl
 import com.example.tgbot.data.repository.TelegramRepositoryImpl
@@ -146,9 +147,12 @@ class TelegramBot(private val token: String) {
     // Инициализация репозитория для работы с БД
     private val summaryRepository = SummaryRepositoryImpl()
 
+    // Инициализация RAG репозитория
+    private val ragRepository = RagRepositoryImpl()
+
     // Инициализация use cases
     private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor, summaryRepository, mcpRepository)
-    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository, mcpRepository)
+    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository, mcpRepository, ragRepository)
     private val handleCallbackUseCase = HandleCallbackUseCase(telegramRepository, mcpRepository)
 
     // Offset для отслеживания обработанных обновлений

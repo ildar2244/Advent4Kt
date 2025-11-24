@@ -7,6 +7,7 @@ import com.example.tgbot.domain.model.Scenario
 import com.example.tgbot.domain.model.SessionManager
 import com.example.tgbot.domain.model.ai.AiModel
 import com.example.tgbot.domain.repository.McpRepository
+import com.example.tgbot.domain.repository.RagRepository
 import com.example.tgbot.domain.repository.SummaryRepository
 import com.example.tgbot.domain.repository.TelegramRepository
 import java.time.ZoneId
@@ -29,6 +30,8 @@ import java.time.format.DateTimeFormatter
  * - /mcp - MCP команды (Weather Tools, Weather Location)
  * - /weather_tools - Список доступных MCP инструментов
  * - /weather_location - Запрос геолокации для прогноза погоды
+ * - /rag <query> - Поиск по индексированным документам через RAG
+ * - /rag_stats - Статистика RAG индекса
  *
  * Команды сценариев обрабатываются динамически через Scenario.findByCommand(),
  * что позволяет легко добавлять новые сценарии без изменения логики обработки.
@@ -36,7 +39,8 @@ import java.time.format.DateTimeFormatter
 class HandleCommandUseCase(
     private val repository: TelegramRepository,
     private val summaryRepository: SummaryRepository,
-    private val mcpRepository: McpRepository
+    private val mcpRepository: McpRepository,
+    private val ragRepository: RagRepository
 ) {
     /**
      * Обрабатывает команду из сообщения и вызывает соответствующий обработчик.
@@ -59,6 +63,8 @@ class HandleCommandUseCase(
             command == "/mcp" -> handleMcpCommand(message.chatId)
             command == "/weather_tools" -> handleWeatherToolsCommand(message.chatId)
             command == "/weather_location" -> handleWeatherLocationCommand(message.chatId)
+            command == "/rag_stats" -> handleRagStatsCommand(message.chatId)
+            command.startsWith("/rag ") -> handleRagCommand(message.chatId, command.removePrefix("/rag ").trim())
             else -> {
                 // Проверяем, является ли команда командой сценария
                 val scenario = Scenario.findByCommand(command)
@@ -435,5 +441,99 @@ class HandleCommandUseCase(
             chatId = chatId,
             text = "📍 Please send your location to get weather forecast.\n\nUse the 📎 (attach) button and select Location."
         )
+    }
+
+    /**
+     * Обрабатывает команду /rag <query>.
+     * Выполняет поиск по индексированным документам через RAG.
+     *
+     * @param chatId ID чата, в который нужно отправить сообщение
+     * @param query Поисковый запрос
+     */
+    private suspend fun handleRagCommand(chatId: Long, query: String) {
+        if (query.isBlank()) {
+            repository.sendMessage(
+                chatId = chatId,
+                text = "❌ Пустой запрос. Используйте: /rag <ваш вопрос>"
+            )
+            return
+        }
+
+        try {
+            repository.sendMessage(
+                chatId = chatId,
+                text = "🔍 Ищу информацию по запросу: \"$query\"..."
+            )
+
+            val results = ragRepository.searchSimilar(query, topK = 5)
+
+            if (results.isEmpty()) {
+                repository.sendMessage(
+                    chatId = chatId,
+                    text = "😕 По вашему запросу ничего не найдено.\n\nПопробуйте переформулировать вопрос или проверьте, что документы проиндексированы."
+                )
+                return
+            }
+
+            val responseText = buildString {
+                append("📚 Найдено ${results.size} релевантных фрагментов:\n\n")
+
+                results.forEachIndexed { index, result ->
+                    append("─────────────────────\n")
+                    append("🔹 Результат ${index + 1} (сходство: ${"%.1f".format(result.similarity * 100)}%)\n")
+                    append("📄 Документ: ${result.documentPath.substringAfterLast("/")}\n")
+                    append("📝 Фрагмент #${result.chunkIndex + 1}\n\n")
+
+                    // Обрезаем контент до 300 символов для компактности
+                    val previewText = if (result.content.length > 300) {
+                        result.content.take(300) + "..."
+                    } else {
+                        result.content
+                    }
+                    append(previewText)
+                    append("\n\n")
+                }
+            }
+
+            repository.sendMessage(chatId = chatId, text = responseText)
+
+        } catch (e: Exception) {
+            repository.sendMessage(
+                chatId = chatId,
+                text = "❌ Ошибка при поиске:\n${e.message}\n\nУбедитесь, что Ollama запущен и модель nomic-embed-text доступна."
+            )
+        }
+    }
+
+    /**
+     * Обрабатывает команду /rag_stats.
+     * Отправляет статистику RAG индекса.
+     *
+     * @param chatId ID чата, в который нужно отправить сообщение
+     */
+    private suspend fun handleRagStatsCommand(chatId: Long) {
+        try {
+            val stats = ragRepository.getStatistics()
+
+            val responseText = buildString {
+                append("📊 Статистика RAG индекса:\n\n")
+                append("📚 Документов: ${stats.documentsCount}\n")
+                append("📝 Чанков: ${stats.chunksCount}\n")
+                append("🧮 Embeddings: ${stats.embeddingsCount}\n\n")
+
+                if (stats.documentsCount == 0) {
+                    append("💡 Индекс пуст. Проиндексируйте документы с помощью CLI:\n")
+                    append("./gradlew :ragfirst:run --args=\"index /path/to/docs\"")
+                }
+            }
+
+            repository.sendMessage(chatId = chatId, text = responseText)
+
+        } catch (e: Exception) {
+            repository.sendMessage(
+                chatId = chatId,
+                text = "❌ Ошибка при получении статистики:\n${e.message}"
+            )
+        }
     }
 }

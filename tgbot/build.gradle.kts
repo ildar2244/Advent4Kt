@@ -40,6 +40,9 @@ buildConfig {
 }
 
 dependencies {
+    // RAG Module
+    implementation(project(":ragfirst"))
+
     // Ktor Client
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.cio)
