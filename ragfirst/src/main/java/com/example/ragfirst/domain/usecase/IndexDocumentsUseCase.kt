@@ -5,6 +5,7 @@ import com.example.ragfirst.domain.model.Document
 import com.example.ragfirst.domain.model.Embedding
 import com.example.ragfirst.domain.repository.OllamaRepository
 import com.example.ragfirst.domain.repository.RagRepository
+import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
 import java.io.File
 
@@ -72,21 +73,49 @@ class IndexDocumentsUseCase(
             val chunks = textChunker.chunk(parsedDocument.content)
             logger.info("Created ${chunks.size} chunks for document: ${file.name}")
 
-            chunks.forEachIndexed { index, chunkText ->
-                val chunk = Chunk(
-                    documentId = documentId,
-                    content = chunkText,
-                    chunkIndex = index
-                )
-                val chunkId = ragRepository.saveChunk(chunk)
+            var successfulChunks = 0
+            var failedChunks = 0
 
-                val embedding = ollamaRepository.generateEmbedding(chunkText)
-                ragRepository.saveEmbedding(Embedding(chunkId, embedding))
+            chunks.forEachIndexed { index, chunkText ->
+                try {
+                    val chunk = Chunk(
+                        documentId = documentId,
+                        content = chunkText,
+                        chunkIndex = index
+                    )
+                    val chunkId = ragRepository.saveChunk(chunk)
+
+                    val embedding = ollamaRepository.generateEmbedding(chunkText)
+                    ragRepository.saveEmbedding(Embedding(chunkId, embedding))
+                    successfulChunks++
+
+                    // Rate limiting: 100ms задержка между запросами
+                    if (index < chunks.size - 1) {
+                        delay(100)
+                    }
+
+                    if ((index + 1) % 10 == 0) {
+                        logger.info("Progress: ${index + 1}/${chunks.size} chunks processed")
+                    }
+                } catch (e: Exception) {
+                    failedChunks++
+                    logger.error("Failed to process chunk $index for file ${file.name}: ${e.message}")
+                    // Продолжаем обработку остальных чанков
+                }
             }
 
-            logger.info("Successfully indexed file: ${file.name}")
+            if (failedChunks > 0) {
+                val errorMsg = "Partially indexed ${file.name}: $successfulChunks/${chunks.size} chunks succeeded, $failedChunks failed"
+                logger.warn(errorMsg)
+                throw PartialIndexingException(errorMsg, successfulChunks, failedChunks)
+            }
+
+            logger.info("Successfully indexed file: ${file.name} ($successfulChunks chunks)")
+        } catch (e: PartialIndexingException) {
+            throw e // Пробрасываем дальше для CLI
         } catch (e: Exception) {
             logger.error("Failed to index file: ${file.name}", e)
+            throw e // Пробрасываем для точной отчётности
         }
     }
 }
@@ -99,3 +128,10 @@ interface DocumentParser {
 interface TextChunker {
     fun chunk(text: String): List<String>
 }
+
+class PartialIndexingException(
+    message: String,
+    val successfulChunks: Int,
+    val failedChunks: Int
+) : Exception(message)
+

@@ -152,7 +152,7 @@ class TelegramBot(private val token: String) {
 
     // Инициализация use cases
     private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor, summaryRepository, mcpRepository)
-    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository, mcpRepository, ragRepository)
+    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository, mcpRepository, ragRepository, aiRepository)
     private val handleCallbackUseCase = HandleCallbackUseCase(telegramRepository, mcpRepository)
 
     // Offset для отслеживания обработанных обновлений

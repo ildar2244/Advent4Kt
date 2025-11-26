@@ -6,6 +6,10 @@ import com.example.tgbot.domain.model.Message
 import com.example.tgbot.domain.model.Scenario
 import com.example.tgbot.domain.model.SessionManager
 import com.example.tgbot.domain.model.ai.AiModel
+import com.example.tgbot.domain.model.ai.AiMessage
+import com.example.tgbot.domain.model.ai.AiRequest
+import com.example.tgbot.domain.model.ai.MessageRole
+import com.example.tgbot.domain.repository.AiRepository
 import com.example.tgbot.domain.repository.McpRepository
 import com.example.tgbot.domain.repository.RagRepository
 import com.example.tgbot.domain.repository.SummaryRepository
@@ -32,6 +36,7 @@ import java.time.format.DateTimeFormatter
  * - /weather_location - Запрос геолокации для прогноза погоды
  * - /rag <query> - Поиск по индексированным документам через RAG
  * - /rag_stats - Статистика RAG индекса
+ * - /ask <query> - Поиск по RAG и генерация ответа через LLM
  *
  * Команды сценариев обрабатываются динамически через Scenario.findByCommand(),
  * что позволяет легко добавлять новые сценарии без изменения логики обработки.
@@ -40,7 +45,8 @@ class HandleCommandUseCase(
     private val repository: TelegramRepository,
     private val summaryRepository: SummaryRepository,
     private val mcpRepository: McpRepository,
-    private val ragRepository: RagRepository
+    private val ragRepository: RagRepository,
+    private val aiRepository: AiRepository
 ) {
     /**
      * Обрабатывает команду из сообщения и вызывает соответствующий обработчик.
@@ -65,6 +71,7 @@ class HandleCommandUseCase(
             command == "/weather_location" -> handleWeatherLocationCommand(message.chatId)
             command == "/rag_stats" -> handleRagStatsCommand(message.chatId)
             command.startsWith("/rag ") -> handleRagCommand(message.chatId, command.removePrefix("/rag ").trim())
+            command.startsWith("/ask ") -> handleAskCommand(message.chatId, command.removePrefix("/ask ").trim())
             else -> {
                 // Проверяем, является ли команда командой сценария
                 val scenario = Scenario.findByCommand(command)
@@ -533,6 +540,158 @@ class HandleCommandUseCase(
             repository.sendMessage(
                 chatId = chatId,
                 text = "❌ Ошибка при получении статистики:\n${e.message}"
+            )
+        }
+    }
+
+    /**
+     * Обрабатывает команду /ask <query>.
+     * Выполняет RAG-поиск, собирает контекст и отправляет запрос к LLM для получения ответа.
+     *
+     * Флоу: query → RAG search (5 chunks) → context assembly → LLM request → formatted response
+     *
+     * ВАЖНО: Команда /ask является stateless - каждый запрос независим,
+     * история диалога НЕ используется.
+     *
+     * @param chatId ID чата
+     * @param query Вопрос пользователя
+     */
+    private suspend fun handleAskCommand(chatId: Long, query: String) {
+        // 1. Валидация входных данных
+        if (query.isBlank()) {
+            repository.sendMessage(
+                chatId = chatId,
+                text = "❌ Пустой запрос. Используйте: /ask <ваш вопрос>"
+            )
+            return
+        }
+
+        // 2. Проверка выбора модели
+        val session = SessionManager.getSession(chatId)
+        if (session.selectedModel == null) {
+            repository.sendMessage(
+                chatId = chatId,
+                text = "❌ Сначала выберите AI-модель с помощью команды /models"
+            )
+            return
+        }
+
+        try {
+            // 3. RAG поиск
+            repository.sendMessage(chatId, "🔍 Ищу релевантную информацию...")
+            val ragResults = ragRepository.searchSimilar(query, topK = 5)
+
+            if (ragResults.isEmpty()) {
+                repository.sendMessage(
+                    chatId,
+                    "😕 Релевантная информация не найдена.\n\n" +
+                    "Попробуйте:\n" +
+                    "• Переформулировать вопрос\n" +
+                    "• Проверить индекс: /rag_stats\n" +
+                    "• Индексировать документы через CLI"
+                )
+                return
+            }
+
+            // 4. Сборка контекста из чанков
+            val contextText = buildString {
+                appendLine("Релевантная информация из документов:")
+                appendLine()
+                ragResults.forEachIndexed { index, result ->
+                    appendLine("【Источник ${index + 1}】")
+                    appendLine("Документ: ${result.documentPath.substringAfterLast("/")}")
+                    appendLine("Релевантность: ${"%.1f".format(result.similarity * 100)}%")
+                    appendLine()
+                    appendLine(result.content)
+                    appendLine()
+                    appendLine("---")
+                    appendLine()
+                }
+            }
+
+            // 5. Системный промпт (инструкции для LLM)
+            val systemPrompt = """
+Вы - ассистент, который отвечает на вопросы на основе предоставленного контекста.
+
+ВАЖНО:
+1. Используйте ТОЛЬКО информацию из предоставленных источников
+2. Если ответ не найден в источниках, скажите об этом явно
+3. Цитируйте источники при формулировании ответа (например, "Согласно Источнику 2...")
+4. Не придумывайте информацию, которой нет в источниках
+5. Если источники содержат противоречивую информацию, укажите на это
+
+Отвечайте кратко и по существу.
+""".trimIndent()
+
+            // 6. Формирование сообщений для LLM
+            val messages = listOf(
+                AiMessage(
+                    role = MessageRole.SYSTEM,
+                    content = systemPrompt
+                ),
+                AiMessage(
+                    role = MessageRole.USER,
+                    content = buildString {
+                        appendLine(contextText)
+                        appendLine()
+                        appendLine("Вопрос: $query")
+                    }
+                )
+            )
+
+            // 7. Отправка запроса к LLM
+            repository.sendMessage(chatId, "🤖 Генерирую ответ на основе найденной информации...")
+            val aiResponse = aiRepository.sendMessage(
+                AiRequest(
+                    model = session.selectedModel!!,
+                    messages = messages,
+                    temperature = session.temperature,
+                    huggingFaceModel = if (session.selectedModel == AiModel.HUGGING_FACE) {
+                        session.selectedHuggingFaceModel
+                    } else null
+                )
+            )
+
+            // 8. Форматирование и отправка ответа
+            val responseText = buildString {
+                append("💡 Ответ:\n\n")
+                append(aiResponse.content)
+                append("\n\n━━━━━━━━━━━━━━━━━━━━\n")
+                append("📚 Источники (${ragResults.size}):\n\n")
+
+                ragResults.forEachIndexed { index, result ->
+                    append("${index + 1}. ${result.documentPath.substringAfterLast("/")}\n")
+                    append("   Фрагмент #${result.chunkIndex + 1} ")
+                    append("(релевантность: ${"%.1f".format(result.similarity * 100)}%)\n")
+                }
+
+                append("\n━━━━━━━━━━━━━━━━━━━━\n")
+                append("📊 Статистика:\n")
+                aiResponse.responseTimeMillis?.let { append("⏱️  Время: ${it} мс\n") }
+                aiResponse.tokenUsage?.let { usage ->
+                    append("🔢 Токены: ${usage.promptTokens} + ${usage.completionTokens} = ${usage.totalTokens}\n")
+                }
+
+                val modelName = if (session.selectedModel == AiModel.HUGGING_FACE) {
+                    session.selectedHuggingFaceModel?.displayName ?: session.selectedModel!!.displayName
+                } else session.selectedModel!!.displayName
+                append("🤖 Модель: $modelName (temp: ${session.temperature})")
+            }
+
+            repository.sendMessage(chatId, responseText)
+
+        } catch (e: Exception) {
+            repository.sendMessage(
+                chatId,
+                "❌ Ошибка при обработке запроса:\n${e.message}\n\n" +
+                "Возможные причины:\n" +
+                "• Ollama не запущен (проверьте http://localhost:11434)\n" +
+                "• Проблемы с AI API\n" +
+                "• База данных RAG не инициализирована\n\n" +
+                "Попробуйте:\n" +
+                "• Повторить запрос\n" +
+                "• Выбрать другую модель (/models)\n" +
+                "• Проверить статус: /rag_stats"
             )
         }
     }

@@ -26,7 +26,7 @@ fun main(args: Array<String>) {
     val documentParser = CompositeDocumentParser(
         listOf(MarkdownParser(), PdfParser())
     )
-    val textChunker = RecursiveTextChunker(chunkSize = 500, overlap = 50)
+    val textChunker = RecursiveTextChunker(chunkSize = 400, overlap = 40)
 
     val indexUseCase = IndexDocumentsUseCase(ragRepository, ollamaRepository, documentParser, textChunker)
     val searchUseCase = SearchSimilarUseCase(ragRepository, ollamaRepository)
@@ -55,6 +55,11 @@ fun main(args: Array<String>) {
                 try {
                     indexUseCase.executeSingleFile(filePath)
                     println("✓ File indexed successfully!")
+                } catch (e: PartialIndexingException) {
+                    println("⚠ Warning: File partially indexed")
+                    println("  Successful chunks: ${e.successfulChunks}")
+                    println("  Failed chunks: ${e.failedChunks}")
+                    println("  Error: ${e.message}")
                 } catch (e: IllegalArgumentException) {
                     println("✗ Error: ${e.message}")
                 } catch (e: Exception) {
