@@ -4,6 +4,7 @@ import com.example.tgbot.domain.model.CallbackQuery
 import com.example.tgbot.domain.model.InlineKeyboard
 import com.example.tgbot.domain.model.InlineKeyboardButton
 import com.example.tgbot.domain.model.RagInteractiveState
+import com.example.tgbot.domain.model.RagSearchResult
 import com.example.tgbot.domain.model.Scenario
 import com.example.tgbot.domain.model.SessionManager
 import com.example.tgbot.domain.model.ai.AiMessage
@@ -53,6 +54,12 @@ class HandleCallbackUseCase(
     suspend operator fun invoke(callback: CallbackQuery) {
         val data = callback.data ?: return
         val message = callback.message ?: return
+
+        // Проверяем callback для просмотра источников /ask
+        if (data.startsWith("ask_source:")) {
+            handleAskSourceCallback(callback, data, message.chatId)
+            return
+        }
 
         // Проверяем RAG Interactive callbacks
         if (data.startsWith("rag_interactive:")) {
@@ -697,6 +704,95 @@ class HandleCallbackUseCase(
             }
             SessionManager.setRagInteractiveState(chatId, null)
             throw e
+        }
+    }
+
+    /**
+     * Обрабатывает callback для просмотра содержимого источника из команды /ask.
+     * Показывает popup с preview фрагмента (150 символов).
+     *
+     * @param callback Callback-запрос
+     * @param data Callback данные в формате "ask_source:{documentId}:{chunkIndex}"
+     * @param chatId ID чата
+     */
+    private suspend fun handleAskSourceCallback(
+        callback: CallbackQuery,
+        data: String,
+        chatId: Long
+    ) {
+        try {
+            // 1. Парсинг callback_data
+            val parts = data.removePrefix("ask_source:").split(":")
+            if (parts.size != 2) {
+                repository.answerCallbackQuery(
+                    callback.id,
+                    "❌ Неверный формат данных",
+                    showAlert = true
+                )
+                return
+            }
+
+            val documentId = parts[0].toIntOrNull()
+            val chunkIndex = parts[1].toIntOrNull()
+
+            if (documentId == null || chunkIndex == null) {
+                repository.answerCallbackQuery(
+                    callback.id,
+                    "❌ Неверные параметры",
+                    showAlert = true
+                )
+                return
+            }
+
+            // 2. Получение chunk из БД
+            val result = ragRepository.getChunkByDocumentAndIndex(documentId, chunkIndex)
+
+            if (result == null) {
+                repository.answerCallbackQuery(
+                    callback.id,
+                    "❌ Фрагмент не найден в базе данных.\nВозможно, документ был удален.",
+                    showAlert = true
+                )
+                return
+            }
+
+            // 3. Форматирование preview
+            val previewText = formatSourcePreview(result)
+
+            // 4. Отправка popup
+            repository.answerCallbackQuery(
+                callbackQueryId = callback.id,
+                text = previewText,
+                showAlert = true
+            )
+
+        } catch (e: Exception) {
+            println("❌ Error in handleAskSourceCallback: ${e.message}")
+            e.printStackTrace()
+            repository.answerCallbackQuery(
+                callback.id,
+                "❌ Ошибка при загрузке фрагмента: ${e.message}",
+                showAlert = true
+            )
+        }
+    }
+
+    /**
+     * Форматирует preview содержимого фрагмента для popup.
+     * Возвращает только текст цитаты (до 200 символов).
+     *
+     * @param result Результат поиска с данными фрагмента
+     * @return Текст цитаты для popup
+     */
+    private fun formatSourcePreview(result: RagSearchResult): String {
+        // Telegram popup строгий лимит: 200 символов (включая "...")
+        // Оставляем только текст цитаты без метаданных
+        val maxContentLength = 197  // 197 + "..." = 200
+
+        return if (result.content.length > maxContentLength) {
+            result.content.take(maxContentLength).trim() + "..."
+        } else {
+            result.content
         }
     }
 }

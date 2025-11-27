@@ -678,7 +678,21 @@ class HandleCommandUseCase(
                 append("🤖 Модель: $modelName (temp: ${session.temperature})")
             }
 
-            repository.sendMessage(chatId, responseText)
+            // Создаем inline keyboard с кнопками-номерами источников
+            // Размещаем кнопки в один ряд (или два, если больше 5 источников)
+            val buttons = ragResults.mapIndexed { index, result ->
+                InlineKeyboardButton(
+                    text = "${index + 1}",
+                    callbackData = "ask_source:${result.documentId}:${result.chunkIndex}"
+                )
+            }
+
+            // Разбиваем кнопки по рядам (по 5 кнопок в ряд)
+            val keyboard = InlineKeyboard(
+                rows = buttons.chunked(5)
+            )
+
+            repository.sendMessageWithKeyboard(chatId, responseText, keyboard)
 
         } catch (e: Exception) {
             repository.sendMessage(

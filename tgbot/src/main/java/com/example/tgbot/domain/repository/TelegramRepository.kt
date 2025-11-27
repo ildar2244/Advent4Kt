@@ -39,8 +39,10 @@ interface TelegramRepository {
      * Убирает индикатор загрузки (часики) на кнопке.
      *
      * @param callbackQueryId ID callback-запроса
+     * @param text Текст для отображения пользователю (опционально)
+     * @param showAlert true - показать как popup диалог, false - как toast уведомление
      */
-    suspend fun answerCallbackQuery(callbackQueryId: String)
+    suspend fun answerCallbackQuery(callbackQueryId: String, text: String? = null, showAlert: Boolean = false)
 
     /**
      * Получает список обновлений от Telegram через long polling.

@@ -26,11 +26,21 @@ class RagRepositoryImpl : RagRepository {
 
     override suspend fun searchSimilar(query: String, topK: Int): List<RagSearchResult> {
         val results = searchUseCase.execute(query, topK, threshold = 0.7f)
-        return results.map { result ->
+        return results.mapNotNull { result ->
+            // Проверяем, что document.id и chunk.id не null
+            val docId = result.document.id
+            val chId = result.chunk.id
+
+            if (docId == null || chId == null) {
+                return@mapNotNull null
+            }
+
             RagSearchResult(
                 content = result.chunk.content,
                 documentPath = result.document.path,
+                documentId = docId,
                 chunkIndex = result.chunk.chunkIndex,
+                chunkId = chId,
                 similarity = result.similarity
             )
         }
@@ -47,5 +57,32 @@ class RagRepositoryImpl : RagRepository {
 
     override suspend fun clearIndex() {
         clearUseCase.execute()
+    }
+
+    override suspend fun getChunkByDocumentAndIndex(documentId: Int, chunkIndex: Int): RagSearchResult? {
+        try {
+            // Получаем document из БД
+            val document = ragfirstRepository.getDocument(documentId) ?: return null
+
+            // Получаем все chunks документа
+            val chunks = ragfirstRepository.getChunksByDocumentId(documentId)
+
+            // Находим chunk с нужным chunkIndex
+            val chunk = chunks.firstOrNull { it.chunkIndex == chunkIndex } ?: return null
+
+            // Возвращаем как RagSearchResult
+            return RagSearchResult(
+                content = chunk.content,
+                documentPath = document.path,
+                documentId = document.id ?: 0,
+                chunkIndex = chunk.chunkIndex,
+                chunkId = chunk.id ?: 0,
+                similarity = 1.0f  // Не релевантность, а точное совпадение
+            )
+        } catch (e: Exception) {
+            println("Error in getChunkByDocumentAndIndex: ${e.message}")
+            e.printStackTrace()
+            return null
+        }
     }
 }

@@ -38,9 +38,13 @@ class TelegramRepositoryImpl(
         )
     }
 
-    override suspend fun answerCallbackQuery(callbackQueryId: String) {
+    override suspend fun answerCallbackQuery(callbackQueryId: String, text: String?, showAlert: Boolean) {
         api.answerCallbackQuery(
-            AnswerCallbackQueryRequest(callbackQueryId)
+            AnswerCallbackQueryRequest(
+                callbackQueryId = callbackQueryId,
+                text = text,
+                showAlert = if (showAlert) true else null  // Отправляем null вместо false по умолчанию Telegram API
+            )
         )
     }
 
