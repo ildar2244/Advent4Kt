@@ -65,6 +65,16 @@ enum class Scenario(
         displayName = "Эксперты",
         command = "experts",
         callbackData = "scenario_experts"
+    ),
+
+    /**
+     * RAG Интерактивный - интерактивный RAG-поиск с возможностью пробовать разные чанки.
+     * Собирает 9 результатов, отправляет топ-3 в LLM, предлагает попробовать другие.
+     */
+    RAG_INTERACTIVE(
+        displayName = "🔍 RAG Интерактивный",
+        command = "rag-interactive",
+        callbackData = "scenario_rag_interactive"
     );
 
     companion object {

@@ -19,7 +19,7 @@ import kotlinx.serialization.json.Json
 
 class OllamaApiClient(
     private val baseUrl: String = BuildConfig.OLLAMA_BASE_URL,
-    private val model: String = "nomic-embed-text"
+    private val model: String,
 ) {
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {

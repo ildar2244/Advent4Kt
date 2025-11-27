@@ -3,12 +3,16 @@ package com.example.tgbot.domain.usecase
 import com.example.tgbot.domain.model.CallbackQuery
 import com.example.tgbot.domain.model.InlineKeyboard
 import com.example.tgbot.domain.model.InlineKeyboardButton
+import com.example.tgbot.domain.model.RagInteractiveState
 import com.example.tgbot.domain.model.Scenario
 import com.example.tgbot.domain.model.SessionManager
 import com.example.tgbot.domain.model.ai.AiMessage
 import com.example.tgbot.domain.model.ai.AiModel
+import com.example.tgbot.domain.model.ai.AiRequest
 import com.example.tgbot.domain.model.ai.MessageRole
+import com.example.tgbot.domain.repository.AiRepository
 import com.example.tgbot.domain.repository.McpRepository
+import com.example.tgbot.domain.repository.RagRepository
 import com.example.tgbot.domain.repository.TelegramRepository
 
 /**
@@ -35,7 +39,9 @@ import com.example.tgbot.domain.repository.TelegramRepository
  */
 class HandleCallbackUseCase(
     private val repository: TelegramRepository,
-    private val mcpRepository: McpRepository
+    private val mcpRepository: McpRepository,
+    private val ragRepository: RagRepository,
+    private val aiRepository: AiRepository
 ) {
     /**
      * Обрабатывает нажатие пользователем на инлайн-кнопку.
@@ -47,6 +53,12 @@ class HandleCallbackUseCase(
     suspend operator fun invoke(callback: CallbackQuery) {
         val data = callback.data ?: return
         val message = callback.message ?: return
+
+        // Проверяем RAG Interactive callbacks
+        if (data.startsWith("rag_interactive:")) {
+            handleRagInteractiveCallback(callback, data, message.chatId, message.messageId)
+            return
+        }
 
         // Проверяем, является ли callback MCP команд ой
         if (data == "mcp_weather_tools") {
@@ -415,5 +427,276 @@ class HandleCallbackUseCase(
 
         // Отвечаем на callback (убирает "часики" на кнопке в Telegram)
         repository.answerCallbackQuery(callback.id)
+    }
+
+    /**
+     * Обрабатывает callback от inline кнопок в сценарии RAG_INTERACTIVE.
+     *
+     * Поддерживаемые действия:
+     * - "rag_interactive:next" - следующие 3 чанка
+     * - "rag_interactive:done" - завершить поиск
+     *
+     * @param callback Callback-запрос
+     * @param data Callback данные
+     * @param chatId ID чата
+     * @param messageId ID сообщения с кнопками
+     */
+    private suspend fun handleRagInteractiveCallback(
+        callback: CallbackQuery,
+        data: String,
+        chatId: Long,
+        messageId: Long
+    ) {
+        val action = data.removePrefix("rag_interactive:")
+
+        when (action) {
+            "next" -> handleRagInteractiveNext(chatId, messageId)
+            "done" -> handleRagInteractiveDone(chatId, messageId)
+        }
+
+        // Отвечаем на callback (убирает "часики" на кнопке)
+        repository.answerCallbackQuery(callback.id)
+    }
+
+    /**
+     * Обрабатывает action "next" - переход к следующим 3 чанкам.
+     *
+     * @param chatId ID чата
+     * @param messageId ID сообщения с кнопками
+     */
+    private suspend fun handleRagInteractiveNext(chatId: Long, messageId: Long) {
+        println("🔄 handleRagInteractiveNext called")
+
+        val session = SessionManager.getSession(chatId)
+        val state = session.ragInteractiveState
+
+        if (state == null) {
+            println("❌ State is null")
+            repository.editMessageText(
+                chatId = chatId,
+                messageId = messageId,
+                text = "❌ Состояние RAG-поиска утеряно. Отправьте новый запрос."
+            )
+            return
+        }
+
+        // Проверяем, что есть следующая попытка
+        if (!state.hasNextAttempt()) {
+            println("❌ No more attempts available")
+            repository.editMessageText(
+                chatId = chatId,
+                messageId = messageId,
+                text = "❌ Больше нет доступных чанков."
+            )
+            SessionManager.setRagInteractiveState(chatId, null)
+            return
+        }
+
+        // Обновляем состояние (increment attempt)
+        val updatedState = state.copy(currentAttempt = state.currentAttempt + 1)
+        SessionManager.setRagInteractiveState(chatId, updatedState)
+
+        println("⬆️ State updated: attempt ${state.currentAttempt} -> ${updatedState.currentAttempt}")
+
+        // Отправляем новый LLM запрос с следующими чанками (в отдельном сообщении)
+        println("🚀 Calling sendRagLlmRequest from callback...")
+        try {
+            sendRagLlmRequest(chatId, updatedState, session.selectedModel!!)
+            println("✅ sendRagLlmRequest from callback completed")
+        } catch (e: Exception) {
+            println("❌ Exception in sendRagLlmRequest from callback: ${e.message}")
+            e.printStackTrace()
+            throw e
+        }
+    }
+
+    /**
+     * Обрабатывает action "done" - завершение RAG-поиска.
+     *
+     * @param chatId ID чата
+     * @param messageId ID сообщения с кнопками
+     */
+    private suspend fun handleRagInteractiveDone(chatId: Long, messageId: Long) {
+        // Очищаем состояние
+        SessionManager.setRagInteractiveState(chatId, null)
+
+        // Удаляем кнопки и обновляем сообщение
+        repository.editMessageText(
+            chatId = chatId,
+            messageId = messageId,
+            text = "✅ RAG-поиск завершен.\n\nОтправьте новый запрос для следующего поиска."
+        )
+    }
+
+    /**
+     * Отправляет LLM запрос с текущими чанками из RAG-поиска.
+     * Показывает inline кнопки для продолжения поиска (если доступно).
+     *
+     * Метод дублируется из HandleMessageUseCase для обработки callback'ов.
+     * TODO: Рефакторинг - вынести в отдельный use case для переиспользования.
+     *
+     * @param chatId ID чата пользователя
+     * @param state Состояние RAG-поиска
+     * @param selectedModel Выбранная AI-модель
+     */
+    private suspend fun sendRagLlmRequest(
+        chatId: Long,
+        state: RagInteractiveState,
+        selectedModel: AiModel
+    ) {
+        try {
+            println("📤 [Callback] sendRagLlmRequest: attempt=${state.currentAttempt}, maxAttempts=${state.maxAttempts}")
+
+            val session = SessionManager.getSession(chatId)
+            val currentChunks = state.getCurrentChunks()
+            println("📝 [Callback] Current chunks count: ${currentChunks.size}")
+
+            if (currentChunks.isEmpty()) {
+                println("❌ [Callback] ERROR: currentChunks is empty!")
+                repository.sendMessage(chatId, "❌ Ошибка: нет чанков для обработки")
+                SessionManager.setRagInteractiveState(chatId, null)
+                return
+            }
+
+            val (maxSim, minSim) = state.getCurrentSimilarityRange()
+            println("📊 [Callback] Similarity range: $maxSim - $minSim")
+
+        // 1. Сборка контекста из чанков
+        val contextText = buildString {
+            appendLine("Релевантная информация из документов:")
+            appendLine()
+            currentChunks.forEachIndexed { index, result ->
+                appendLine("【Источник ${index + 1}】")
+                appendLine("Документ: ${result.documentPath.substringAfterLast("/")}")
+                appendLine("Релевантность: ${"%.1f".format(result.similarity * 100)}%")
+                appendLine()
+                appendLine(result.content)
+                appendLine()
+                appendLine("---")
+                appendLine()
+            }
+        }
+
+        // 2. Системный промпт
+        val systemPrompt = """
+Вы - ассистент, который отвечает на вопросы на основе предоставленного контекста.
+
+ВАЖНО:
+1. Используйте ТОЛЬКО информацию из предоставленных источников
+2. Если ответ не найден в источниках, скажите об этом явно
+3. Цитируйте источники при формулировании ответа (например, "Согласно Источнику 2...")
+4. Не придумывайте информацию, которой нет в источниках
+5. Если источники содержат противоречивую информацию, укажите на это
+
+Отвечайте кратко и по существу.
+""".trimIndent()
+
+        // 3. Формирование сообщений для LLM (stateless - без conversationHistory)
+        val messages = listOf(
+            AiMessage(role = MessageRole.SYSTEM, content = systemPrompt),
+            AiMessage(
+                role = MessageRole.USER,
+                content = buildString {
+                    appendLine(contextText)
+                    appendLine()
+                    appendLine("Вопрос: ${state.query}")
+                }
+            )
+        )
+
+        // 4. Отправка запроса к LLM
+        println("🤖 [Callback] Sending request to AI: model=$selectedModel, temp=${session.temperature}")
+        repository.sendMessage(chatId, "🤖 Генерирую ответ на основе найденной информации...")
+
+        val aiResponse = try {
+            aiRepository.sendMessage(
+                AiRequest(
+                    model = selectedModel,
+                    messages = messages,
+                    temperature = session.temperature,
+                    huggingFaceModel = if (selectedModel == AiModel.HUGGING_FACE) {
+                        session.selectedHuggingFaceModel
+                    } else null
+                )
+            )
+        } catch (e: Exception) {
+            println("❌ [Callback] AI request failed: ${e.message}")
+            e.printStackTrace()
+            throw e
+        }
+
+        println("✅ [Callback] AI response received: ${aiResponse.content.take(100)}...")
+
+        // 5. Формирование ответа пользователю
+        val chunkRange = "${state.currentAttempt * 3 + 1}-${state.currentAttempt * 3 + currentChunks.size}"
+        val responseText = buildString {
+            append("💡 Ответ:\n\n")
+            append(aiResponse.content)
+            append("\n\n━━━━━━━━━━━━━━━━━━━━\n")
+            append("📊 Использованные чанки: $chunkRange из ${state.allResults.size}\n")
+            append("📈 Similarity: ${"%.2f".format(maxSim)}-${"%.2f".format(minSim)}\n")
+            append("\n📚 Источники (${currentChunks.size}):\n\n")
+
+            currentChunks.forEachIndexed { index, result ->
+                append("${index + 1}. ${result.documentPath.substringAfterLast("/")}\n")
+                append("   Фрагмент #${result.chunkIndex + 1} ")
+                append("(релевантность: ${"%.1f".format(result.similarity * 100)}%)\n")
+            }
+
+            append("\n━━━━━━━━━━━━━━━━━━━━\n")
+            append("📊 Статистика:\n")
+            aiResponse.responseTimeMillis?.let { append("⏱️  Время: ${it} мс\n") }
+            aiResponse.tokenUsage?.let { usage ->
+                append("🔢 Токены: ${usage.promptTokens} + ${usage.completionTokens} = ${usage.totalTokens}\n")
+            }
+
+            val modelName = if (selectedModel == AiModel.HUGGING_FACE) {
+                session.selectedHuggingFaceModel?.displayName ?: selectedModel.displayName
+            } else selectedModel.displayName
+            append("🤖 Модель: $modelName (temp: ${session.temperature})")
+        }
+
+            // 6. Отправка ответа с inline кнопками (если доступна следующая попытка)
+            if (state.hasNextAttempt()) {
+                println("🔘 [Callback] Sending response with buttons (remaining attempts: ${state.maxAttempts - state.currentAttempt - 1})")
+                val remainingAttempts = state.maxAttempts - state.currentAttempt - 1
+                val keyboard = InlineKeyboard(
+                    rows = listOf(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "🔄 Ещё ($remainingAttempts)",
+                                callbackData = "rag_interactive:next"
+                            ),
+                            InlineKeyboardButton(
+                                text = "✅ Достаточно",
+                                callbackData = "rag_interactive:done"
+                            )
+                        )
+                    )
+                )
+
+                println("📞 [Callback] Calling repository.sendMessageWithKeyboard...")
+                repository.sendMessageWithKeyboard(chatId, responseText, keyboard)
+                println("✉️ [Callback] Response with keyboard sent successfully")
+            } else {
+                println("📨 [Callback] Sending final response without buttons")
+                println("📞 [Callback] Calling repository.sendMessage...")
+                // Последняя попытка - кнопки не показываем
+                repository.sendMessage(chatId, responseText)
+                SessionManager.setRagInteractiveState(chatId, null)  // Очистка состояния
+                println("✉️ [Callback] Final response sent successfully, state cleared")
+            }
+        } catch (e: Exception) {
+            println("❌ [Callback] EXCEPTION in sendRagLlmRequest: ${e.message}")
+            e.printStackTrace()
+            try {
+                repository.sendMessage(chatId, "❌ Критическая ошибка в sendRagLlmRequest (callback): ${e.message}")
+            } catch (sendError: Exception) {
+                println("❌ [Callback] FATAL: Could not send error message: ${sendError.message}")
+                sendError.printStackTrace()
+            }
+            SessionManager.setRagInteractiveState(chatId, null)
+            throw e
+        }
     }
 }

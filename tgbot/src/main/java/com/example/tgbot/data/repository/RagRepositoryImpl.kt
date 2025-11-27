@@ -13,7 +13,7 @@ import com.example.tgbot.domain.repository.RagRepository
 
 class RagRepositoryImpl : RagRepository {
     private val ragfirstRepository = RagfirstRepositoryImpl()
-    private val ollamaClient = OllamaApiClient()
+    private val ollamaClient = OllamaApiClient(model = "bge-m3")
     private val ollamaRepository = OllamaRepositoryImpl(ollamaClient)
 
     private val searchUseCase = SearchSimilarUseCase(ragfirstRepository, ollamaRepository)

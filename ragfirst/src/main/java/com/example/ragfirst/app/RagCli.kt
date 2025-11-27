@@ -19,7 +19,9 @@ fun main(args: Array<String>) {
 
     DatabaseFactory.init()
 
-    val ollamaClient = OllamaApiClient()
+    val bgeM3 = "bge-m3"
+    val nomicEmbedText = "nomic-embed-text"
+    val ollamaClient = OllamaApiClient(model = bgeM3)
     val ollamaRepository = OllamaRepositoryImpl(ollamaClient)
     val ragRepository = RagRepositoryImpl()
 
