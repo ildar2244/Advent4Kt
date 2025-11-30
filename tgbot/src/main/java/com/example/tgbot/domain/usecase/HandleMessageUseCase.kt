@@ -4,6 +4,7 @@ import com.example.tgbot.domain.model.Experts
 import com.example.tgbot.domain.model.InlineKeyboard
 import com.example.tgbot.domain.model.InlineKeyboardButton
 import com.example.tgbot.domain.model.Message
+import com.example.tgbot.domain.model.RagChatState
 import com.example.tgbot.domain.model.RagInteractiveState
 import com.example.tgbot.domain.model.Scenario
 import com.example.tgbot.domain.model.SessionManager
@@ -78,6 +79,7 @@ class HandleMessageUseCase(
         when (session.currentScenario) {
             Scenario.EXPERTS -> handleExpertsScenario(message.chatId, userText, session.selectedModel!!)
             Scenario.RAG_INTERACTIVE -> handleRagInteractiveScenario(message.chatId, userText, session.selectedModel!!)
+            Scenario.RAG_CHAT -> handleRagChatScenario(message.chatId, userText, session.selectedModel!!)
             else -> handleAiMessage(message.chatId, userText, session.selectedModel!!, session.currentScenario)
         }
     }
@@ -306,7 +308,7 @@ class HandleMessageUseCase(
      * Возвращает system prompt для указанного сценария.
      *
      * @param scenario Сценарий взаимодействия
-     * @return System prompt или null для FREE_CHAT и EXPERTS
+     * @return System prompt или null для FREE_CHAT, EXPERTS, RAG_INTERACTIVE, RAG_CHAT (обрабатываются отдельно)
      */
     private fun getSystemPromptForScenario(scenario: Scenario): String? {
         return when (scenario) {
@@ -317,6 +319,7 @@ class HandleMessageUseCase(
             Scenario.COMPRESSION -> SystemPrompts.COMPRESSION
             Scenario.EXPERTS -> null // Этот сценарий обрабатывается отдельно
             Scenario.RAG_INTERACTIVE -> null // Этот сценарий обрабатывается отдельно
+            Scenario.RAG_CHAT -> null // Этот сценарий обрабатывается отдельно (system prompt добавляется в handleRagChatScenario)
         }
     }
 
@@ -696,6 +699,143 @@ class HandleMessageUseCase(
             }
             SessionManager.setRagInteractiveState(chatId, null)
             throw e
+        }
+    }
+
+    /**
+     * Обрабатывает сообщение в сценарии "RAG Чат".
+     * При каждом новом вопросе выполняет RAG-поиск (topK=3),
+     * комбинирует с историей диалога (до 10 сообщений),
+     * и возвращает ответ со ссылками на источники.
+     *
+     * @param chatId ID чата пользователя
+     * @param userText Текст сообщения от пользователя
+     * @param model Выбранная AI-модель
+     */
+    private suspend fun handleRagChatScenario(
+        chatId: Long,
+        userText: String,
+        model: AiModel
+    ) {
+        try {
+            val session = SessionManager.getSession(chatId)
+
+            // 1. RAG поиск (topK=3)
+            val ragResults = ragRepository.searchSimilar(userText, topK = 3)
+
+            if (ragResults.isEmpty()) {
+                telegramRepository.sendMessage(
+                    chatId,
+                    "😕 Релевантная информация не найдена.\n\n" +
+                    "Попробуйте:\n" +
+                    "• Переформулировать вопрос\n" +
+                    "• Проверить индекс: /rag_stats"
+                )
+                return
+            }
+
+            // 2. Создать userMessage
+            val userMessage = AiMessage(role = MessageRole.USER, content = userText)
+
+            // 3. Добавить в историю (лимит 10 сообщений)
+            SessionManager.addMessage(chatId, userMessage)
+
+            // 4. Получить обновленную сессию
+            val updatedSession = SessionManager.getSession(chatId)
+
+            // 5. Сборка conversationHistory для LLM
+            val conversationHistory = mutableListOf<AiMessage>()
+
+            // System prompt
+            conversationHistory.add(
+                AiMessage(role = MessageRole.SYSTEM, content = SystemPrompts.RAG_CHAT)
+            )
+
+            // Вся история (кроме system messages)
+            updatedSession.conversationHistory
+                .filter { it.role != MessageRole.SYSTEM }
+                .forEach { conversationHistory.add(it) }
+
+            // 6. Встроить RAG контекст в последнее user message
+            val ragContext = buildString {
+                appendLine("Релевантная информация из документов:")
+                appendLine()
+                ragResults.forEachIndexed { index, result ->
+                    appendLine("【Источник ${index + 1}】")
+                    appendLine(result.content)
+                    appendLine()
+                }
+                appendLine("---")
+                appendLine()
+                appendLine("Вопрос: $userText")
+            }
+
+            // Заменить последнее сообщение на версию с RAG контекстом
+            conversationHistory[conversationHistory.lastIndex] =
+                AiMessage(role = MessageRole.USER, content = ragContext)
+
+            // 7. Отправить в LLM
+            val aiResponse = aiRepository.sendMessage(
+                AiRequest(
+                    model = model,
+                    messages = conversationHistory,
+                    temperature = updatedSession.temperature,
+                    huggingFaceModel = if (model == AiModel.HUGGING_FACE) {
+                        updatedSession.selectedHuggingFaceModel
+                    } else null
+                )
+            )
+
+            // 8. Добавить ответ AI в историю
+            SessionManager.addMessage(
+                chatId,
+                AiMessage(role = MessageRole.ASSISTANT, content = aiResponse.content)
+            )
+
+            // 9. Сохранить RAG состояние
+            SessionManager.setRagChatState(chatId, RagChatState(ragResults))
+
+            // 10. Создать inline keyboard с кнопками источников
+            val buttons = ragResults.mapIndexed { index, result ->
+                InlineKeyboardButton(
+                    text = "${index + 1}",
+                    callbackData = "ask_source:${result.documentId}:${result.chunkIndex}"
+                )
+            }
+            val keyboard = InlineKeyboard(rows = buttons.chunked(5))
+
+            // 11. Форматировать и отправить ответ
+            val responseText = buildString {
+                append(aiResponse.content)
+                append("\n\n━━━━━━━━━━━━━━━━━━━━\n")
+                append("📚 Источники (${ragResults.size}):\n\n")
+
+                ragResults.forEachIndexed { index, result ->
+                    append("${index + 1}. ${result.documentPath.substringAfterLast("/")}\n")
+                    append("   Релевантность: ${"%.1f".format(result.similarity * 100)}%\n")
+                }
+
+                append("\n━━━━━━━━━━━━━━━━━━━━\n")
+                append("📊 Статистика:\n")
+                aiResponse.responseTimeMillis?.let { append("⏱️  Время: $it мс\n") }
+                aiResponse.tokenUsage?.let { usage ->
+                    append("🔢 Токены: ${usage.promptTokens} + ${usage.completionTokens} = ${usage.totalTokens}\n")
+                }
+
+                val modelName = if (model == AiModel.HUGGING_FACE) {
+                    updatedSession.selectedHuggingFaceModel?.displayName ?: model.displayName
+                } else model.displayName
+                append("🤖 Модель: $modelName (temp: ${updatedSession.temperature})")
+            }
+
+            telegramRepository.sendMessageWithKeyboard(chatId, responseText, keyboard)
+
+        } catch (e: Exception) {
+            telegramRepository.sendMessage(
+                chatId,
+                "❌ Ошибка при обработке RAG запроса:\n${e.message}\n\n" +
+                "Попробуйте еще раз или используйте /stop для выхода."
+            )
         }
     }
 }

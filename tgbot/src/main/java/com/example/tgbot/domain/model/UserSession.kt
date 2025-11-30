@@ -20,6 +20,8 @@ import com.example.tgbot.domain.model.ai.HuggingFaceModel
  * @property compressionCount Количество выполненных компрессий истории в текущей сессии
  * @property ragInteractiveState Состояние интерактивного RAG-поиска (query, результаты, текущая попытка).
  *                               Используется в сценарии RAG_INTERACTIVE для отслеживания прогресса поиска.
+ * @property ragChatState Состояние RAG-чата (последние результаты RAG-поиска).
+ *                        Используется в сценарии RAG_CHAT для отображения источников.
  */
 data class UserSession(
     val selectedModel: AiModel? = null,
@@ -29,7 +31,8 @@ data class UserSession(
     val temperature: Double = 0.7,
     val lastPromptTokens: Int = 0,
     val compressionCount: Int = 0,
-    val ragInteractiveState: RagInteractiveState? = null
+    val ragInteractiveState: RagInteractiveState? = null,
+    val ragChatState: RagChatState? = null
 )
 
 /**
@@ -41,9 +44,15 @@ object SessionManager {
 
     /**
      * Максимальное количество сообщений в истории.
-     * Используется для ограничения размера истории в сценарии CONSULTANT.
+     * Используется для ограничения размера истории в сценарии CONSULTANT и COMPRESSION.
      */
     private const val MAX_HISTORY_SIZE = 20
+
+    /**
+     * Максимальное количество сообщений в истории для сценария RAG_CHAT.
+     * Меньший лимит учитывает дополнительный RAG контекст (3 чанка при каждом запросе).
+     */
+    private const val MAX_RAG_CHAT_HISTORY = 10
 
     /**
      * Получает сессию пользователя. Если сессии нет, создает новую.
@@ -76,8 +85,9 @@ object SessionManager {
 
     /**
      * Устанавливает текущий сценарий для пользователя.
-     * Если переходим НЕ на CONSULTANT или COMPRESSION, история очищается.
+     * Если переходим НЕ на CONSULTANT, COMPRESSION или RAG_CHAT, история очищается.
      * Если переходим НЕ на RAG_INTERACTIVE, очищается состояние RAG-поиска.
+     * Если переходим НЕ на RAG_CHAT, очищается состояние RAG-чата.
      *
      * @param chatId ID чата пользователя
      * @param scenario Выбранный сценарий
@@ -86,16 +96,20 @@ object SessionManager {
         val session = getSession(chatId)
 
         // Очищаем RAG Interactive state при смене сценария
-        val newRagState = if (scenario != Scenario.RAG_INTERACTIVE) null else session.ragInteractiveState
+        val newRagInteractiveState = if (scenario != Scenario.RAG_INTERACTIVE) null else session.ragInteractiveState
 
-        // Очищаем историю при переходе на любой сценарий кроме CONSULTANT и COMPRESSION
-        if (scenario != Scenario.CONSULTANT && scenario != Scenario.COMPRESSION) {
+        // Очищаем RAG Chat state при смене сценария
+        val newRagChatState = if (scenario != Scenario.RAG_CHAT) null else session.ragChatState
+
+        // Очищаем историю при переходе на любой сценарий кроме CONSULTANT, COMPRESSION и RAG_CHAT
+        if (scenario !in listOf(Scenario.CONSULTANT, Scenario.COMPRESSION, Scenario.RAG_CHAT)) {
             session.conversationHistory.clear()
         }
 
         sessions[chatId] = session.copy(
             currentScenario = scenario,
-            ragInteractiveState = newRagState
+            ragInteractiveState = newRagInteractiveState,
+            ragChatState = newRagChatState
         )
     }
 
@@ -125,8 +139,9 @@ object SessionManager {
 
     /**
      * Добавляет сообщение в историю диалога.
-     * Автоматически ограничивает историю последними 20 сообщениями.
-     * Используется для сценариев CONSULTANT и COMPRESSION.
+     * Автоматически ограничивает историю в зависимости от сценария:
+     * - RAG_CHAT: 10 сообщений (меньший лимит из-за дополнительного RAG контекста)
+     * - CONSULTANT, COMPRESSION: 20 сообщений
      *
      * @param chatId ID чата пользователя
      * @param message Сообщение для добавления в историю
@@ -135,10 +150,17 @@ object SessionManager {
         val session = getSession(chatId)
         session.conversationHistory.add(message)
 
-        // Ограничиваем историю последними 20 сообщениями
-        if (session.conversationHistory.size > MAX_HISTORY_SIZE) {
-            // Удаляем самые старые сообщения, оставляя только последние MAX_HISTORY_SIZE
-            val toRemove = session.conversationHistory.size - MAX_HISTORY_SIZE
+        // Определяем лимит в зависимости от сценария
+        val limit = if (session.currentScenario == Scenario.RAG_CHAT) {
+            MAX_RAG_CHAT_HISTORY
+        } else {
+            MAX_HISTORY_SIZE
+        }
+
+        // Ограничиваем историю последними N сообщениями
+        if (session.conversationHistory.size > limit) {
+            // Удаляем самые старые сообщения, оставляя только последние N
+            val toRemove = session.conversationHistory.size - limit
             repeat(toRemove) {
                 session.conversationHistory.removeAt(0)
             }
@@ -211,5 +233,26 @@ object SessionManager {
      */
     fun getRagInteractiveState(chatId: Long): RagInteractiveState? {
         return getSession(chatId).ragInteractiveState
+    }
+
+    /**
+     * Устанавливает состояние RAG-чата для пользователя.
+     *
+     * @param chatId ID чата пользователя
+     * @param state Новое состояние RAG-чата (null для очистки)
+     */
+    fun setRagChatState(chatId: Long, state: RagChatState?) {
+        val session = getSession(chatId)
+        sessions[chatId] = session.copy(ragChatState = state)
+    }
+
+    /**
+     * Получает состояние RAG-чата для пользователя.
+     *
+     * @param chatId ID чата пользователя
+     * @return Состояние RAG-чата или null если не установлено
+     */
+    fun getRagChatState(chatId: Long): RagChatState? {
+        return getSession(chatId).ragChatState
     }
 }
