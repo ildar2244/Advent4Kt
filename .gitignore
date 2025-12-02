@@ -13,5 +13,7 @@ local.properties
 /CLAUDE.md
 /token_usage.log
 /token_journal/
-*.db
+/tgbot/*.db
+ragfirst/data
+/mcptasks/data
 /examples
