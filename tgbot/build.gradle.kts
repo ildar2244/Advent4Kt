@@ -37,6 +37,7 @@ buildConfig {
     buildConfigField("String", "HUGGING_FACE_API_KEY", "\"${localProperties.getProperty("HUGGING_FACE_API_KEY", "")}\"")
     buildConfigField("String", "MCP_WEATHER_WS_URL", "\"${localProperties.getProperty("MCP_WEATHER_WS_URL", "ws://localhost:8765/mcp")}\"")
     buildConfigField("String", "MCP_TASKS_WS_URL", "\"${localProperties.getProperty("MCP_TASKS_WS_URL", "ws://localhost:8766/mcp")}\"")
+    buildConfigField("String", "MCP_GIT_WS_URL", "\"${localProperties.getProperty("MCP_GIT_WS_URL", "ws://localhost:8767/mcp")}\"")
 }
 
 dependencies {

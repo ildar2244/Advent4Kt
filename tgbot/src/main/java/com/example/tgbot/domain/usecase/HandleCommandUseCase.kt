@@ -9,7 +9,9 @@ import com.example.tgbot.domain.model.ai.AiModel
 import com.example.tgbot.domain.model.ai.AiMessage
 import com.example.tgbot.domain.model.ai.AiRequest
 import com.example.tgbot.domain.model.ai.MessageRole
+import com.example.tgbot.data.remote.ai.OpenAiApiClient
 import com.example.tgbot.domain.repository.AiRepository
+import com.example.tgbot.domain.repository.McpGitRepository
 import com.example.tgbot.domain.repository.McpRepository
 import com.example.tgbot.domain.repository.RagRepository
 import com.example.tgbot.domain.repository.SummaryRepository
@@ -46,7 +48,9 @@ class HandleCommandUseCase(
     private val summaryRepository: SummaryRepository,
     private val mcpRepository: McpRepository,
     private val ragRepository: RagRepository,
-    private val aiRepository: AiRepository
+    private val aiRepository: AiRepository,
+    private val mcpGitRepository: com.example.tgbot.domain.repository.McpGitRepository,
+    private val openAiClient: com.example.tgbot.data.remote.ai.OpenAiApiClient
 ) {
     /**
      * Обрабатывает команду из сообщения и вызывает соответствующий обработчик.
@@ -72,6 +76,7 @@ class HandleCommandUseCase(
             command == "/rag_stats" -> handleRagStatsCommand(message.chatId)
             command.startsWith("/rag ") -> handleRagCommand(message.chatId, command.removePrefix("/rag ").trim())
             command.startsWith("/ask ") -> handleAskCommand(message.chatId, command.removePrefix("/ask ").trim())
+            command.startsWith("/help-project ") -> handleHelpProjectCommand(message.chatId, command.removePrefix("/help-project ").trim())
             else -> {
                 // Проверяем, является ли команда командой сценария
                 val scenario = Scenario.findByCommand(command)
@@ -705,6 +710,171 @@ class HandleCommandUseCase(
                 "Попробуйте:\n" +
                 "• Повторить запрос\n" +
                 "• Выбрать другую модель (/models)\n" +
+                "• Проверить статус: /rag_stats"
+            )
+        }
+    }
+
+    /**
+     * Обработчик команды /help-project - помощь по проекту через RAG + Git + GPT-4o-mini.
+     * Stateless режим (без истории диалога), жестко привязан к OpenAI GPT-4o-mini.
+     * Комбинирует RAG-поиск с информацией о текущей git-ветке.
+     */
+    private suspend fun handleHelpProjectCommand(chatId: Long, query: String) {
+        // 1. Валидация
+        if (query.isBlank()) {
+            repository.sendMessage(
+                chatId = chatId,
+                text = "❌ Пустой запрос. Используйте: /help-project <ваш вопрос>\n\n" +
+                       "Примеры:\n" +
+                       "• /help-project как добавить новую команду в бота?\n" +
+                       "• /help-project где находится обработка RAG запросов?\n" +
+                       "• /help-project как работает сценарий Experts?"
+            )
+            return
+        }
+
+        try {
+            // 2. RAG поиск
+            repository.sendMessage(chatId, "🔍 Ищу релевантную документацию проекта...")
+            val ragResults = ragRepository.searchSimilar(query, topK = 5)
+
+            if (ragResults.isEmpty()) {
+                repository.sendMessage(
+                    chatId,
+                    "😕 Релевантная документация не найдена.\n\n" +
+                    "Попробуйте:\n" +
+                    "• Переформулировать вопрос\n" +
+                    "• Проверить индекс: /rag_stats\n" +
+                    "• Индексировать документы через CLI"
+                )
+                return
+            }
+
+            // 3. Получение git ветки
+            val branchName = try {
+                mcpGitRepository.getCurrentBranch()
+            } catch (e: Exception) {
+                "unknown (git unavailable: ${e.message})"
+            }
+
+            // 4. Сборка контекста из RAG результатов и git branch
+            val contextText = buildString {
+                appendLine("Текущая ветка: $branchName")
+                appendLine()
+                appendLine("Релевантные фрагменты документации:")
+                appendLine()
+                ragResults.forEachIndexed { index, result ->
+                    appendLine("【Источник ${index + 1}】")
+                    appendLine("Документ: ${result.documentPath.substringAfterLast("/")}")
+                    appendLine("Релевантность: ${"%.1f".format(result.similarity * 100)}%")
+                    appendLine()
+                    appendLine(result.content)
+                    appendLine()
+                    appendLine("---")
+                    appendLine()
+                }
+            }
+
+            // 5. System prompt для ассистента по проекту
+            val systemPrompt = """
+Вы - ассистент по проекту Advent4Kt, который помогает разработчикам.
+
+КОНТЕКСТ:
+- Текущая ветка: $branchName
+- Релевантные фрагменты документации предоставлены ниже
+
+ВАЖНО:
+1. Используйте ТОЛЬКО информацию из предоставленных источников
+2. Учитывайте контекст текущей ветки при ответе
+3. Если ответ не найден в источниках, скажите об этом явно
+4. Давайте конкретные рекомендации по коду/архитектуре
+5. Цитируйте источники при формулировании ответа (например, "Согласно Источнику 2...")
+
+Отвечайте технически точно и кратко.
+""".trimIndent()
+
+            // 6. Формирование сообщений для LLM
+            val messages = listOf(
+                AiMessage(
+                    role = MessageRole.SYSTEM,
+                    content = systemPrompt
+                ),
+                AiMessage(
+                    role = MessageRole.USER,
+                    content = buildString {
+                        appendLine(contextText)
+                        appendLine()
+                        appendLine("Вопрос: $query")
+                    }
+                )
+            )
+
+            // 7. Прямой вызов OpenAI GPT-4o-mini (bypass AiRepository)
+            repository.sendMessage(chatId, "🤖 Генерирую ответ на основе документации...")
+
+            val startTime = System.currentTimeMillis()
+            val aiResponse = openAiClient.sendMessage(
+                AiRequest(
+                    model = AiModel.GPT_4O_MINI, // Hardcoded GPT-4o-mini
+                    messages = messages,
+                    temperature = 0.7, // Fixed temperature
+                    huggingFaceModel = null
+                )
+            )
+            val executionTime = System.currentTimeMillis() - startTime
+
+            // 8. Форматирование и отправка ответа
+            val responseText = buildString {
+                append("💡 Помощь по проекту:\n\n")
+                append(aiResponse.content)
+                append("\n\n━━━━━━━━━━━━━━━━━━━━\n")
+                append("🌿 Ветка: $branchName\n")
+                append("━━━━━━━━━━━━━━━━━━━━\n")
+                append("📚 Источники (${ragResults.size}):\n\n")
+
+                ragResults.forEachIndexed { index, result ->
+                    append("${index + 1}. ${result.documentPath.substringAfterLast("/")}\n")
+                    append("   Фрагмент #${result.chunkIndex + 1} ")
+                    append("(релевантность: ${"%.1f".format(result.similarity * 100)}%)\n")
+                }
+
+                append("\n━━━━━━━━━━━━━━━━━━━━\n")
+                append("📊 Статистика:\n")
+                append("⏱️  Время: $executionTime мс\n")
+                aiResponse.tokenUsage?.let { usage ->
+                    append("🔢 Токены: ${usage.promptTokens} + ${usage.completionTokens} = ${usage.totalTokens}\n")
+                }
+                append("🤖 Модель: GPT-4o-mini (temp: 0.7)")
+            }
+
+            // 9. Создаем inline keyboard с кнопками-номерами источников
+            val buttons = ragResults.mapIndexed { index, result ->
+                InlineKeyboardButton(
+                    text = "${index + 1}",
+                    callbackData = "ask_source:${result.documentId}:${result.chunkIndex}"
+                )
+            }
+
+            // Разбиваем кнопки по рядам (по 5 кнопок в ряд)
+            val keyboard = InlineKeyboard(
+                rows = buttons.chunked(5)
+            )
+
+            repository.sendMessageWithKeyboard(chatId, responseText, keyboard)
+
+        } catch (e: Exception) {
+            repository.sendMessage(
+                chatId,
+                "❌ Ошибка при обработке запроса:\n${e.message}\n\n" +
+                "Возможные причины:\n" +
+                "• Ollama не запущен (проверьте http://localhost:11434)\n" +
+                "• MCP Git сервер не запущен\n" +
+                "• Проблемы с OpenAI API\n" +
+                "• База данных RAG не инициализирована\n\n" +
+                "Попробуйте:\n" +
+                "• Запустить mcpgit сервер: ./gradlew :mcpgit:run\n" +
+                "• Повторить запрос\n" +
                 "• Проверить статус: /rag_stats"
             )
         }

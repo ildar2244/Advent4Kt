@@ -11,6 +11,7 @@ import com.example.tgbot.data.remote.ai.OpenAiApiClient
 import com.example.tgbot.data.remote.ai.YandexGptApiClient
 import com.example.tgbot.data.repository.AiRepositoryImpl
 import com.example.tgbot.data.repository.GeocodingRepositoryImpl
+import com.example.tgbot.data.repository.McpGitRepositoryImpl
 import com.example.tgbot.data.repository.McpRepositoryImpl
 import com.example.tgbot.data.repository.RagRepositoryImpl
 import com.example.tgbot.data.repository.TasksRepositoryImpl
@@ -113,6 +114,13 @@ class TelegramBot(private val token: String) {
     )
     private val tasksRepository = TasksRepositoryImpl(tasksWebSocketClient)
 
+    // Инициализация MCP Git WebSocket Client
+    private val mcpGitClient = McpWebSocketClient(
+        httpClient = httpClient,
+        wsUrl = BuildConfig.MCP_GIT_WS_URL
+    )
+    private val mcpGitRepository = McpGitRepositoryImpl(mcpGitClient)
+
     // Инициализация Geocoding Repository для конвертации городов в координаты
     private val geocodingRepository = GeocodingRepositoryImpl(httpClient)
 
@@ -152,7 +160,7 @@ class TelegramBot(private val token: String) {
 
     // Инициализация use cases
     private val handleMessageUseCase = HandleMessageUseCase(telegramRepository, aiRepository, historyCompressor, summaryRepository, mcpRepository, ragRepository)
-    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository, mcpRepository, ragRepository, aiRepository)
+    private val handleCommandUseCase = HandleCommandUseCase(telegramRepository, summaryRepository, mcpRepository, ragRepository, aiRepository, mcpGitRepository, openAiClient)
     private val handleCallbackUseCase = HandleCallbackUseCase(telegramRepository, mcpRepository, ragRepository, aiRepository)
 
     // Offset для отслеживания обработанных обновлений
@@ -188,6 +196,18 @@ class TelegramBot(private val token: String) {
             println("⚠️ Не удалось подключиться к MCP Tasks WebSocket: ${e.message}")
             println("   ${e.javaClass.simpleName}: ${e.stackTraceToString().take(500)}")
             println("   Функции задач будут недоступны. Бот продолжит работу...")
+        }
+
+        // Подключение к MCP Git WebSocket серверу
+        try {
+            println("🔌 Подключение к MCP Git WebSocket: ${BuildConfig.MCP_GIT_WS_URL}")
+            println("   Ожидание установки соединения (таймаут 5 секунд)...")
+            mcpGitClient.connect()
+            println("✅ Подключено к MCP Git WebSocket успешно!")
+        } catch (e: Exception) {
+            println("⚠️ Не удалось подключиться к MCP Git WebSocket: ${e.message}")
+            println("   ${e.javaClass.simpleName}: ${e.stackTraceToString().take(500)}")
+            println("   Функции Git будут недоступны. Бот продолжит работу...")
         }
 
         println("✅ Telegram бот готов к работе")
