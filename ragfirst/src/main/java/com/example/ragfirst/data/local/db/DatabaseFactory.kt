@@ -13,7 +13,9 @@ object DatabaseFactory {
         // Если запущено из модуля ragfirst, поднимаемся на уровень выше
         if (cwd.name == "ragfirst") cwd.parentFile else cwd
     }
-    private val DB_PATH = File(projectRoot, "ragfirst/data/rag.db").absolutePath
+    private val dbPathProjectDocs = "docs/rag_project_docs.db"
+    private val dbPathModule = "ragfirst/data/rag.db"
+    private val DB_PATH = File(projectRoot, dbPathModule).absolutePath
     private val JDBC_URL = "jdbc:sqlite:$DB_PATH"
 
     val databaseDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
